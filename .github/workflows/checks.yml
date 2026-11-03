@@ -7,6 +7,20 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: domivka_test
+          POSTGRES_PASSWORD: disposable-ci-password
+          POSTGRES_DB: domivka_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U domivka_test -d domivka_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     defaults:
       run:
         working-directory: Domivka_3/Domivka
@@ -19,9 +33,17 @@ jobs:
         with:
           node-version: '22'
       - run: python -m pip install -r bot/requirements.txt
+      - name: Validate Render blueprint
+        run: |
+          python -m pip install 'jsonschema>=4,<5' 'PyYAML>=6,<7'
+          python tests/validate_blueprint.py
       - run: bash -n deploy/install.sh
       - run: python -m compileall -q bot
       - run: python -m unittest discover -s tests -v
+      - name: PostgreSQL integration
+        env:
+          DOMIVKA_TEST_POSTGRES_URL: postgresql://domivka_test:disposable-ci-password@localhost:5432/domivka_test
+        run: python -m unittest discover -s tests -p 'test_postgres.py' -v
       - run: node tests/check_frontend.mjs
       - name: Install disposable browser test tools
         run: |

@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import sqlite3
+import storage
 import uuid
 from urllib.parse import urlparse
 
@@ -70,11 +71,8 @@ def support_text():
 async def setup(module):
     global B,DB
     B=module
-    rows=await db.q('pragma database_list')
-    path=next((r['file'] for r in rows if r['name']=='main'),'')
-    if not path:raise RuntimeError('Billing requires file-backed database')
     if DB is not None:DB.close()
-    DB=sqlite3.connect(path,timeout=3)
+    DB = storage.connect(db.storage_target())
     DB.row_factory=sqlite3.Row
     DB.executescript(SCHEMA)
     DB.commit()

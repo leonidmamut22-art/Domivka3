@@ -1,6 +1,7 @@
 """Власна база бота (SQLite). Один файл data/domivka.db, жодних зовнішніх сервісів."""
 import asyncio
 import aiosqlite
+import storage
 
 SCHEMA = """
 create table if not exists users(
@@ -49,6 +50,16 @@ create index if not exists ix_l_c on listings(city, active, blocked);
 """
 
 DB: aiosqlite.Connection
+TARGET = None
+
+
+def storage_target():
+    if TARGET is None:raise RuntimeError("Call db.init before accessing storage")
+    return TARGET
+
+
+def is_postgres():
+    return storage.is_postgres(TARGET) if TARGET else storage.is_postgres()
 LOCK = asyncio.Lock()
 
 
@@ -69,8 +80,9 @@ ADD_COLS = {
 
 
 async def init(path: str):
-    global DB
-    DB = await aiosqlite.connect(path)
+    global DB, TARGET
+    TARGET = storage.target(path)
+    DB = await storage.connect_async(TARGET)
     DB.row_factory = aiosqlite.Row
     await DB.execute("pragma journal_mode=wal")
     old_reviews = False
@@ -123,9 +135,15 @@ async def occupied(lid: int) -> set[str]:
 async def book(lid: int, guest: int, ci: str, co: str, guests: int, total: int, status: str = 'pending', due_by: str = ''):
     """Створює бронювання, лише якщо дати вільні (захист від подвійного бронювання)."""
     async with LOCK:
-        if await one("select 1 from bookings where listing_id=? and status!='cancelled' and ci<? and co>?", (lid, co, ci)):
-            return None
-        if await one("select 1 from blocks where listing_id=? and d>=? and d<?", (lid, ci, co)):
-            return None
-        return await ex("insert into bookings(listing_id,guest,ci,co,guests,total,status,due_by) values(?,?,?,?,?,?,?,?)", (lid, guest, ci, co, guests, total, status, due_by))
-
+        if is_postgres():await DB.execute('begin immediate')
+        try:
+            if await one("select 1 from bookings where listing_id=? and status!='cancelled' and ci<? and co>?", (lid, co, ci)):
+                if is_postgres():await DB.rollback()
+                return None
+            if await one("select 1 from blocks where listing_id=? and d>=? and d<?", (lid, ci, co)):
+                if is_postgres():await DB.rollback()
+                return None
+            return await ex("insert into bookings(listing_id,guest,ci,co,guests,total,status,due_by) values(?,?,?,?,?,?,?,?)", (lid, guest, ci, co, guests, total, status, due_by))
+        except Exception:
+            if is_postgres():await DB.rollback()
+            raise

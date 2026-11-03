@@ -11,6 +11,7 @@ import os
 import re
 import secrets
 import sqlite3
+import storage
 from urllib.parse import urlparse
 
 import db
@@ -95,11 +96,8 @@ async def setup(module):
     owner_env=os.environ.get('OWNER_ID','').strip()
     OWNER=num(owner_env) if owner_env else (configured[0] if configured else None)
     IMMUTABLE_ADMINS=frozenset(configured+([OWNER] if OWNER else []))
-    rows=await db.q('pragma database_list')
-    path=next((r['file'] for r in rows if r['name']=='main'),'')
-    if not path:raise RuntimeError('Business requires a file-backed database')
     if DB is not None:DB.close()
-    DB=sqlite3.connect(path,timeout=3)
+    DB = storage.connect(db.storage_target())
     DB.row_factory=sqlite3.Row
     DB.executescript(SCHEMA)
     if 'price_stars' not in {r['name'] for r in DB.execute('pragma table_info(biz_offers)')}:

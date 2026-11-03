@@ -10,6 +10,7 @@ import logging
 import json
 import re
 import sqlite3
+import storage
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -58,13 +59,9 @@ import cart
 async def setup(bot_module):
     global B, DB
     B = bot_module
-    rows = await db.q('pragma database_list')
-    path = next((r['file'] for r in rows if r['name'] == 'main'), '')
-    if not path:
-        raise RuntimeError('Marketplace requires a file-backed database')
     if DB is not None:
         DB.close()
-    DB = sqlite3.connect(path, timeout=3)
+    DB = storage.connect(db.storage_target())
     DB.row_factory = sqlite3.Row
     DB.executescript(SCHEMA)
     have = {r['name'] for r in DB.execute('pragma table_info(market_orders)')}

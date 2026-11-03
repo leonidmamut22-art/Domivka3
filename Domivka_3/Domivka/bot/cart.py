@@ -9,6 +9,7 @@ import html
 import json
 import re
 import sqlite3
+import storage
 
 import db
 import market
@@ -37,13 +38,9 @@ create index if not exists cart_seller_groups on cart_groups(seller_id,buyer_id)
 async def setup(bot_module):
     global B, DB
     B = bot_module
-    rows = await db.q('pragma database_list')
-    path = next((r['file'] for r in rows if r['name'] == 'main'), '')
-    if not path:
-        raise RuntimeError('Cart requires a file-backed database')
     if DB is not None:
         DB.close()
-    DB = sqlite3.connect(path, timeout=3)
+    DB = storage.connect(db.storage_target())
     DB.row_factory = sqlite3.Row
     DB.executescript(SCHEMA)
     have = {r['name'] for r in DB.execute('pragma table_info(market_orders)')}

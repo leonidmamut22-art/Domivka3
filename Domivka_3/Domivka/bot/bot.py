@@ -1648,7 +1648,11 @@ async def background():
                     await tell(b["owner"], f"🎉 Гість виїхав: +{growth.PTS['host_stay']} балів у Клубі!")
                 if r.get("ref"):
                     await tell(r["ref"], f"🎉 Ваш друг завершив проживання: +{growth.PTS['ref_stay']} балів!")
-            if last_backup != today():
+            if getattr(db, 'is_postgres', deployment.postgres_storage)():
+                if last_backup != 'postgres':
+                    logging.info('PostgreSQL storage: local SQLite backup disabled. Configure retention and recovery with the database provider; no local DB file is copied.')
+                    last_backup = 'postgres'
+            elif last_backup != today():
                 (DATA / "backups").mkdir(exist_ok=True)
                 # Online backup includes committed WAL data consistently.
                 async with db.aiosqlite.connect(str(DATA / "backups" / f"domivka_{today()}.db")) as backup:
@@ -1720,7 +1724,7 @@ async def main():
         BotCommand(command="menu", description="Меню нерухомості"),
         BotCommand(command="app", description="Відкрити мініапп"),
         BotCommand(command="help", description="Допомога")])
-    explicit = os.environ.get("WEBAPP_URL", "").rstrip("/")
+    explicit = deployment.public_origin()
     if os.environ.get("WEBAPP", "on").lower() != "off":
         try:
             port = await webapp.start(sys.modules[__name__], num("WEBAPP_PORT", 8080))
@@ -1731,11 +1735,30 @@ async def main():
         elif os.environ.get("TUNNEL", "auto").lower() != "off":
             asyncio.create_task(tunnel.supervise(port, on_tunnel_url))
             logging.info("Готую адресу для Mini App (перший раз ~1 хвилина, завантажується cloudflared)…")
-    asyncio.create_task(background())
-    logging.info("Бот @%s запущено. Адміністраторів: %d. Режим оплати: %s. Не закривайте це вікно.", BOT_USERNAME, len(ADMINS), PAYMODE)
-    await bot.delete_webhook(drop_pending_updates=False)
+    worker = asyncio.create_task(background())
     logging.info("Domivka %s — marketplace, business and cart enabled", VERSION)
-    await dp.start_polling(bot)
+    mode = deployment.execution_mode()
+    try:
+        if mode == 'webhook':
+            await dp.emit_startup(bot=bot)
+            await bot.set_webhook(url=deployment.webhook_url(), secret_token=deployment.webhook_secret(),
+                                  allowed_updates=dp.resolve_used_update_types(), max_connections=1,
+                                  drop_pending_updates=False)
+            logging.info('Bot @%s running in awaited webhook mode; HTTP updates finish before acknowledgement.', BOT_USERNAME)
+            await deployment.wait_for_shutdown()
+        else:
+            await bot.delete_webhook(drop_pending_updates=False)
+            logging.info("Бот @%s запущено через polling. Адміністраторів: %d. Режим оплати: %s.", BOT_USERNAME, len(ADMINS), PAYMODE)
+            await dp.start_polling(bot)
+    finally:
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+        # Keep the registered webhook on shutdown: a replacement instance may
+        # already be serving it. Telegram retains updates through Render sleep.
+        await webapp.stop()
+        if mode == 'webhook':
+            await dp.emit_shutdown(bot=bot)
+        await bot.session.close()
 
 
 if __name__ == "__main__":

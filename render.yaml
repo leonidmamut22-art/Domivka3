@@ -1,0 +1,44 @@
+# Render web service; PostgreSQL is provisioned separately in Neon.
+services:
+  - type: web
+    name: domivka-market
+    runtime: python
+    region: frankfurt
+    plan: free
+    branch: codex/domivka-marketplace
+    rootDir: Domivka_3/Domivka
+    buildCommand: pip install -r bot/requirements.txt
+    startCommand: python -u bot/bot.py
+    healthCheckPath: /api/identity
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.12
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: DEPLOYMENT_MODE
+        value: production
+      - key: BOT_MODE
+        value: webhook
+      - key: TUNNEL
+        value: "off"
+      - key: WEBAPP
+        value: "on"
+      - key: WEBAPP_HOST
+        value: 0.0.0.0
+      - key: REQUIRE_APPROVAL
+        value: "1"
+      - key: PAYMENT_MODE
+        value: direct
+      - key: WEBHOOK_SECRET
+        generateValue: true
+      - key: BOT_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: OWNER_ID
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      - key: EXPECTED_BOT_USERNAME
+        sync: false

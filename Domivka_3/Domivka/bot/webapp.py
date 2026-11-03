@@ -31,8 +31,10 @@ import billing
 import cart
 from version import VERSION
 import listing_import
+import deployment
 
 B = None
+RUNNERS = []
 CACHE: dict = {}
 HITS: dict = defaultdict(deque)
 INDEX = Path(__file__).resolve().parent.parent / "webapp" / "index.html"
@@ -959,16 +961,25 @@ def make_app(mod) -> web.Application:
                     web.get("/api/host", host), web.post("/api/host/decide", host_decide), web.post("/api/host/cancel", host_cancel), web.post("/api/host/listing/{id}", host_edit),
                     web.post("/api/host/new", host_new), web.post("/api/host/describe", host_describe),
                     web.post("/api/host/import", host_import), web.get("/api/pro", pro_info), web.post("/api/pro/buy", pro_buy), web.post("/api/boost/buy", boost_buy)])
+    deployment.add_webhook(app, mod)
     return app
 
 
 async def start(mod, port: int) -> int:
-    """Bind only the requested port: a conflict must never route to another bot."""
-    runner = web.AppRunner(make_app(mod), access_log=None)
+    """Bind exactly the configured socket; Render supplies PORT and public host."""
+    host, port = deployment.server_binding(port)
+    runner = web.AppRunner(make_app(mod), access_log=None, shutdown_timeout=60)
     await runner.setup()
     try:
-        await web.TCPSite(runner, os.environ.get('WEBAPP_HOST','127.0.0.1'), port).start()
+        await web.TCPSite(runner, host, port).start()
     except BaseException:
         await runner.cleanup()
         raise
+    RUNNERS.append(runner)
     return port
+
+
+async def stop():
+    """Drain HTTP handlers before closing the bot session on webhook shutdown."""
+    while RUNNERS:
+        await RUNNERS.pop().cleanup()
