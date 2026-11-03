@@ -55,7 +55,8 @@ LOCK = asyncio.Lock()
 ADD_COLS = {
     "users": [("payout", "text default ''"), ("verified", "integer not null default 0"), ("legal_name", "text default ''"), ("strikes", "integer not null default 0"),
               ("ref_by", "integer"), ("points", "integer not null default 0"), ("streak", "integer not null default 0"), ("last_open", "text default ''")],
-    "listings": [("boost_until", "text default ''"), ("free_boost_at", "text default ''"), ("instant", "integer not null default 0"),
+    "listings": [("property_type", "text not null default 'apartment'"),
+                 ("boost_until", "text default ''"), ("free_boost_at", "text default ''"), ("instant", "integer not null default 0"),
                  ("min_nights", "integer not null default 1"), ("address", "text default ''"),
                  ("dep_mode", "text default 'cash'"), ("dep_amt", "integer not null default 0"), ("amen", "text default ''"), ("lat", "real"), ("lon", "real"),
                  ("club_pct", "integer not null default 0"), ("t_el", "real not null default 0"), ("t_wat", "real not null default 0"), ("t_gas", "real not null default 0")],
@@ -127,3 +128,4 @@ async def book(lid: int, guest: int, ci: str, co: str, guests: int, total: int, 
         if await one("select 1 from blocks where listing_id=? and d>=? and d<?", (lid, ci, co)):
             return None
         return await ex("insert into bookings(listing_id,guest,ci,co,guests,total,status,due_by) values(?,?,?,?,?,?,?,?)", (lid, guest, ci, co, guests, total, status, due_by))
+

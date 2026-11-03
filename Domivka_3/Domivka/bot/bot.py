@@ -24,6 +24,8 @@ import feat
 import growth
 import tunnel
 import webapp
+import market
+import market_bot
 
 ROOT = Path(__file__).resolve().parent.parent
 ENV = ROOT / ".env"
@@ -750,13 +752,16 @@ async def relay(chat: int, u: dict, text: str):
 
 
 # ───────────────────────── майстер нового оголошення ─────────────────────────
-STEPS = ["title", "city", "district", "price_night", "price_month", "rooms", "guests", "descr", "photos"]
+STEPS = ["title", "property_type", "city", "district", "price_night", "price_month", "rooms", "guests", "descr", "photos"]
+PROPERTY_TYPES = {"1": "apartment", "2": "house", "3": "room", "4": "commercial", "5": "garage", "6": "land", "7": "other"}
 PROMPT = {"title": "Заголовок оголошення (5–120 символів):", "city": "Місто:", "district": "Район:", "price_night": "Ціна за ніч, ₴:",
           "price_month": "Ціна за місяць, ₴ (або «-», якщо на місяць не здаєте):", "rooms": "Кількість кімнат:", "guests": "Максимум гостей:",
           "descr": "Опишіть житло або натисніть кнопку, і AI напише опис за вас:", "photos": "Надішліть фото (до 6). Потім натисніть «Опублікувати»."}
 
 
 async def ask_step(chat: int, step: str):
+    if step == "property_type":
+        return await say(chat, "Тип нерухомості — надішліть номер:\n1. Квартира\n2. Будинок\n3. Кімната\n4. Комерційна нерухомість\n5. Гараж\n6. Ділянка\n7. Інше")
     rows = {"descr": [[("✨ Написати AI", "nw:ai")]], "photos": [[("✅ Опублікувати", "nw:pub")]]}.get(step, [])
     await say(chat, PROMPT[step], rows + [[("✖ Скасувати", "m:m")]])
 
@@ -773,6 +778,13 @@ async def new_step(chat: int, u: dict, m: Message):
         return await say(chat, f"Фото додано ({len(s['d']['photos'])}/6).", [[("✅ Опублікувати", "nw:pub")]])
     if not t:
         return
+    if step == "property_type":
+        value = PROPERTY_TYPES.get(t, t.lower())
+        if value not in PROPERTY_TYPES.values():
+            return await ask_step(chat, step)
+        s["d"][step] = value
+        s["step"] = "city"
+        return await ask_step(chat, "city")
     if step in ("price_night", "price_month", "rooms", "guests"):
         if not (step == "price_month" and t == "-"):
             if not (t.isdigit() and int(t) > 0):
@@ -818,6 +830,7 @@ async def create_listing(u: dict, d: dict):
     lid = await db.ex("insert into listings(owner,title,city,district,price_night,price_month,rooms,guests,descr,photos,blocked) values(?,?,?,?,?,?,?,?,?,?,?)",
                       (u["id"], d["title"], d["city"], d["district"], d["price_night"], d.get("price_month"), d["rooms"], d["guests"], d.get("descr", ""), json.dumps(d.get("photos", [])), blocked))
     extra = {}
+    extra["property_type"] = d.get("property_type") if d.get("property_type") in PROPERTY_TYPES.values() else "apartment"
     if d.get("amen"):
         extra["amen"] = ",".join(k for k in d["amen"] if k in feat.AMEN)
     if d.get("min_nights"):
@@ -1079,6 +1092,8 @@ async def register(c: CallbackQuery, role: str):
 async def on_message(m: Message):
     if m.chat.type != "private" or not m.from_user:
         return
+    if await market_bot.on_message(m):
+        return
     uid, chat, text = m.from_user.id, m.chat.id, (m.text or "").strip()
     try:
         u = await db.one("select * from users where id=?", (uid,))
@@ -1230,6 +1245,8 @@ async def on_pre(q: PreCheckoutQuery):
 
 @dp.callback_query()
 async def on_cb(c: CallbackQuery):
+    if await market_bot.on_callback(c):
+        return
     await c.answer()
     chat, uid = c.message.chat.id, c.from_user.id
     try:
@@ -1619,7 +1636,9 @@ async def background():
                     await tell(r["ref"], f"🎉 Ваш друг завершив проживання: +{growth.PTS['ref_stay']} балів!")
             if last_backup != today():
                 (DATA / "backups").mkdir(exist_ok=True)
-                shutil.copy(DATA / "domivka.db", DATA / "backups" / f"domivka_{today()}.db")
+                # Online backup includes committed WAL data consistently.
+                async with db.aiosqlite.connect(str(DATA / "backups" / f"domivka_{today()}.db")) as backup:
+                    await db.DB.backup(backup)
                 for old in sorted((DATA / "backups").glob("*.db"))[:-14]:
                     old.unlink()
                 last_backup = today()
@@ -1651,6 +1670,8 @@ async def main():
     PRO["boost_off"] = min(90, num("PRO_BOOST_DISCOUNT", 20))
     DATA.mkdir(exist_ok=True)
     await db.init(str(DATA / "domivka.db"))
+    await market.setup(sys.modules[__name__])
+    market_bot.setup(sys.modules[__name__])
     bot = Bot(os.environ["BOT_TOKEN"], default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     try:
         me = await bot.get_me()
@@ -1658,7 +1679,18 @@ async def main():
         sys.exit("Токен не підійшов. Перевірте BOT_TOKEN у файлі .env (скопіюйте його з @BotFather ще раз).")
     BOT_USERNAME = me.username or ""
     feat.setup(sys.modules[__name__])
-    await bot.set_my_commands([BotCommand(command="menu", description="Головне меню"), BotCommand(command="app", description="Відкрити додаток"), BotCommand(command="help", description="Допомога")])
+    await bot.set_my_commands([
+        BotCommand(command="services", description="Нерухомість або маркет"),
+        BotCommand(command="market", description="Знайти товари"),
+        BotCommand(command="sell", description="Продати річ"),
+        BotCommand(command="import", description="Імпорт свого оголошення за посиланням"),
+        BotCommand(command="moderate", description="Модерація для адміністратора"),
+        BotCommand(command="orders", description="Мої покупки та продажі"),
+        BotCommand(command="rent", description="Оренда нерухомості"),
+        BotCommand(command="settings", description="Мова та налаштування"),
+        BotCommand(command="menu", description="Меню нерухомості"),
+        BotCommand(command="app", description="Відкрити мініапп"),
+        BotCommand(command="help", description="Допомога")])
     explicit = os.environ.get("WEBAPP_URL", "").rstrip("/")
     if os.environ.get("WEBAPP", "on").lower() != "off":
         try:
@@ -1678,3 +1710,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+

@@ -24,11 +24,14 @@ from aiogram.types import BufferedInputFile
 import db
 import feat
 import growth
+import market
+import listing_import
 
 B = None
 CACHE: dict = {}
 HITS: dict = defaultdict(deque)
 INDEX = Path(__file__).resolve().parent.parent / "webapp" / "index.html"
+PROPERTY_TYPES = ("apartment", "house", "room", "commercial", "garage", "land", "other")
 
 
 # ───── Імпорт оголошення за посиланням (власні оголошення господаря) ─────
@@ -36,33 +39,8 @@ IMPORTS: dict = defaultdict(deque)
 
 
 async def safe_get(url: str, maxb: int, image: bool = False):
-    """Завантаження зовнішньої сторінки/картинки з захистом від SSRF: лише http(s), без приватних адрес, до 4 редиректів, ліміт розміру."""
-    loop = asyncio.get_running_loop()
-    async with httpx.AsyncClient(timeout=9, follow_redirects=False, headers={"User-Agent": "Mozilla/5.0 (compatible; DomivkaImport/1.0)", "Accept-Language": "uk,en;q=0.8"}) as cl:
-        for _ in range(5):
-            p = urlparse(url)
-            if p.scheme not in ("http", "https") or not p.hostname:
-                raise ValueError("bad url")
-            for fam, _t, _p, _c, sa in await loop.getaddrinfo(p.hostname, p.port or (443 if p.scheme == "https" else 80), type=socket.SOCK_STREAM):
-                ip = ipaddress.ip_address(sa[0])
-                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
-                    raise ValueError("blocked address")
-            async with cl.stream("GET", url) as r:
-                if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("location"):
-                    url = urljoin(url, r.headers["location"])
-                    continue
-                if r.status_code != 200:
-                    raise ValueError(f"status {r.status_code}")
-                ct = r.headers.get("content-type", "")
-                if image and not ct.startswith("image/"):
-                    raise ValueError("not image")
-                buf = bytearray()
-                async for ch in r.aiter_bytes():
-                    buf += ch
-                    if len(buf) > maxb:
-                        break
-                return bytes(buf[:maxb]), ct, str(r.url)
-    raise ValueError("too many redirects")
+    return await listing_import.safe_fetch(url, maxb, image)
+
 
 
 def to_jpeg(data: bytes):
@@ -158,13 +136,18 @@ def parse_listing_page(src: str, base: str) -> dict:
 def tg_user(init: str, token: str):
     """Перевірка підпису Telegram (initData). Повертає словник користувача або None."""
     try:
-        d = dict(parse_qsl(init, keep_blank_values=True))
+        pairs = parse_qsl(init, keep_blank_values=True)
+        d = dict(pairs)
+        if len(pairs) != len(d):
+            return None
         h = d.pop("hash")
         chk = "\n".join(f"{k}={v}" for k, v in sorted(d.items()))
         key = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
-        if not hmac.compare_digest(hmac.new(key, chk.encode(), hashlib.sha256).hexdigest(), h) or time.time() - int(d["auth_date"]) > 86400:
+        age = time.time() - int(d["auth_date"])
+        if not hmac.compare_digest(hmac.new(key, chk.encode(), hashlib.sha256).hexdigest(), h) or not -30 <= age <= 86400:
             return None
-        return json.loads(d["user"])
+        user = json.loads(d["user"])
+        return user if isinstance(user, dict) and isinstance(user.get("id"), int) and not isinstance(user["id"], bool) and user["id"] > 0 else None
     except Exception:
         return None
 
@@ -250,7 +233,7 @@ def amen_map() -> dict:
 
 async def item(l: dict, full: bool = False, uid: int = 0) -> dict:
     h = await db.one("select name, verified, (select 1 from subs s where s.user=users.id and s.until>=date('now')) pro from users where id=?", (l["owner"],))
-    o = {"id": l["id"], "title": l["title"], "city": l["city"], "district": l["district"], "pn": l["price_night"], "pm": l["price_month"], "rooms": l["rooms"],
+    o = {"id": l["id"], "title": l["title"], "property_type": l.get("property_type", "apartment"), "city": l["city"], "district": l["district"], "pn": l["price_night"], "pm": l["price_month"], "rooms": l["rooms"],
          "guests": l["guests"], "rating": round(l["ra"], 1) if l.get("ra") else None, "rn": l.get("rn", 0), "ver": bool(h and h["verified"] == 2), "pro": bool(h and h["pro"]), "top": B.is_boosted(l),
          "np": len(json.loads(l["photos"])), "amen": [x for x in (l["amen"] or "").split(",") if x], "instant": bool(l["instant"]), "disc": l["discount"], "min": l["min_nights"], "club": l["club_pct"],
          "lat": round(l["lat"], 3) if l["lat"] is not None else None, "lon": round(l["lon"], 3) if l["lon"] is not None else None}
@@ -303,6 +286,41 @@ def make_app(mod) -> web.Application:
     global B
     B = mod
 
+    @handler
+    async def market_api(r):
+        if r.method == "GET" and r.path.startswith("/api/market/photo/"):
+            _, viewer = await auth(r)
+            if viewer and viewer["banned"]:
+                return fail("Доступ обмежено.", "ban", 403)
+            return await market.handle(r, viewer["id"] if viewer else 0)
+        u = await need(r)
+        return await market.handle(r, u["id"])
+
+    @handler
+    async def market_import(r):
+        u = await need(r)
+        q = IMPORTS[u["id"]]
+        now = time.time()
+        while q and now - q[0] > 3600:
+            q.popleft()
+        if len(q) >= 15:
+            return fail("Забагато імпортів. Спробуйте пізніше.", "rate", 429)
+        q.append(now)
+        try:
+            return web.json_response(await listing_import.draft((await body(r)).get("url", ""), parse_listing_page))
+        except ValueError as e:
+            return fail(str(e), "import")
+
+    async def asset(r):
+        # Explicit filenames: no arbitrary file access or directory listing.
+        name = r.match_info["name"]
+        if name not in {"market.js", "design.css", "settings.js"}:
+            raise web.HTTPNotFound()
+        path = INDEX.parent / name
+        if not path.is_file():
+            raise web.HTTPNotFound()
+        return web.FileResponse(path, headers={"Cache-Control": "no-cache"})
+
     async def ping(r):
         return web.json_response({"ok": True, "listings": (await db.one(f"select count(*) n from listings where {B.VIS}"))["n"]})
 
@@ -316,7 +334,7 @@ def make_app(mod) -> web.Application:
         for x in rows:
             ds.setdefault(x["city"], set()).add(x["district"])
         return web.json_response({"cities": sorted(ds), "districts": {c: sorted(v) for c, v in ds.items()}, "amen": amen_map(), "paymode": B.PAYMODE, "dep_pct": B.DEPOSIT,
-                                 "free_cancel": B.FREE_CANCEL_H, "bot": B.BOT_USERNAME})
+                                 "free_cancel": B.FREE_CANCEL_H, "bot": B.BOT_USERNAME, "property_types": PROPERTY_TYPES})
 
     @handler
     async def me(r):
@@ -359,6 +377,11 @@ def make_app(mod) -> web.Application:
         tu, u = await auth(r)
         uid = u["id"] if u else 0
         sql, a = f"{RATED} where {B.VIS.replace('active', 'l.active').replace('blocked', 'l.blocked')}", []
+        if q.get("property_type"):
+            if q["property_type"] not in PROPERTY_TYPES:
+                return fail("Невідомий тип нерухомості.", "property_type")
+            sql += " and l.property_type=?"
+            a.append(q["property_type"])
         if q.get("fav"):
             if not uid:
                 return web.json_response([])
@@ -711,6 +734,10 @@ def make_app(mod) -> web.Application:
             return fail("Оголошення не знайдено.", status=404)
         j = await body(r)
         upd = {}
+        if "property_type" in j:
+            if j["property_type"] not in PROPERTY_TYPES:
+                return fail("Невідомий тип нерухомості.", "property_type")
+            upd["property_type"] = j["property_type"]
         try:
             if "active" in j:
                 upd["active"] = int(bool(j["active"]))
@@ -770,6 +797,9 @@ def make_app(mod) -> web.Application:
             return fail("Спершу підтвердьте номер телефону.", "phone", 409)
         f = await r.post()
         g = lambda k, d="": str(f.get(k, d) or d).strip()
+        property_type = g("property_type", "apartment")
+        if property_type not in PROPERTY_TYPES:
+            return fail("Невідомий тип нерухомості.", "property_type")
         try:
             d = {"title": g("title"), "city": g("city"), "district": g("district"), "price_night": int(g("price_night")), "price_month": int(g("price_month") or 0) or None,
                  "rooms": int(g("rooms", "1")), "guests": int(g("guests", "2")), "descr": g("descr")[:2000], "amen": [x for x in g("amen").split(",") if x],
@@ -807,6 +837,7 @@ def make_app(mod) -> web.Application:
         lid, blocked = await B.create_listing(u, d)
         if lid is None:
             return fail(blocked)
+        await db.ex("update listings set property_type=? where id=?", (property_type, lid))
         if g("club_pct").isdigit():
             await db.ex("update listings set club_pct=? where id=?", (max(0, min(15, int(g("club_pct")))), lid))
         try:
@@ -878,6 +909,8 @@ def make_app(mod) -> web.Application:
         return web.json_response({"link": link, "stars": amount})
 
     app = web.Application(client_max_size=60 * 1024 * 1024, middlewares=[no_cache])
+    app.add_routes([web.get("/assets/{name}", asset), web.post("/api/market/import", market_import),
+                    web.route("*", "/api/market/{tail:.*}", market_api)])
     app.add_routes([web.get("/", index), web.get("/api/ping", ping), web.get("/api/club", club), web.post("/api/club/redeem", club_redeem), web.get("/api/trip/{id}/stay", trip_stay), web.get("/api/wishlist/{id}", wishlist), web.get("/api/meta", meta), web.get("/api/chats", chats), web.post("/api/chat/start", chat_start), web.get("/api/chat/{id}", chat_get), web.post("/api/chat/{id}", chat_send), web.post("/api/alert", alert), web.get("/api/me", me), web.post("/api/register", register), web.get("/api/listings", listings),
                     web.get("/api/listing/{id}", detail), web.get("/p/{id}/{i}", photo), web.post("/api/fav", fav), web.post("/api/ai", ai), web.post("/api/book", book),
                     web.get("/api/trips", trips), web.post("/api/trip/{id}/cancel", trip_cancel), web.post("/api/trip/{id}/paid", trip_paid), web.post("/api/review", review),
@@ -899,3 +932,4 @@ async def start(mod, port: int) -> int:
         except OSError as e:
             last = e
     raise last
+
