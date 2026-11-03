@@ -1,0 +1,27 @@
+[Unit]
+Description=Domivka Telegram bot (%i)
+After=network-online.target caddy.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+[Service]
+Type=simple
+User=domivka
+Group=domivka
+WorkingDirectory=/opt/domivka/%i
+EnvironmentFile=/etc/domivka/%i.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/domivka/%i/.venv/bin/python /opt/domivka/%i/bot/bot.py
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+StateDirectory=domivka/%i
+StateDirectoryMode=0750
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/domivka/%i
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+[Install]
+WantedBy=multi-user.target

@@ -123,9 +123,12 @@ button{transition:transform .25s var(--spring),opacity .2s,background .2s}button
 .rule{display:flex;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}.rule i{font-style:normal;font-size:22px}.rule b{display:block}.rule span{color:var(--hint);font-size:13px}
 @media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
 
-</style></head><body>
+</style><link rel="stylesheet" href="/assets/design.css"></head><body>
 <main id="view"></main><nav id="tabs"></nav><div id="sheets"></div><div id="toast"></div>
 <script>
+/* The public catalog remains usable if Telegram's SDK cannot be loaded. */
+window.Telegram=window.Telegram||{};
+window.Telegram.WebApp=window.Telegram.WebApp||{initData:'',initDataUnsafe:{},ready(){},expand(){},disableVerticalSwipes(){},BackButton:{show(){},hide(){},onClick(){}},HapticFeedback:{impactOccurred(){},notificationOccurred(){}},showAlert:m=>window.alert(m),showConfirm:(m,cb)=>cb(window.confirm(m)),openTelegramLink:u=>window.open(u,'_blank','noopener'),openLink:u=>window.open(u,'_blank','noopener')};
 const tg=Telegram.WebApp,BOT="__BOT__",$=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const HP=(t="light")=>{try{tg.HapticFeedback.impactOccurred(t)}catch(e){}},HN=t=>{try{tg.HapticFeedback.notificationOccurred(t)}catch(e){}};
@@ -175,7 +178,7 @@ async function aiSearch(){const t=F.q.trim();if(!t)return toast("Напишіт�
   const sum=[F.city,F.district,F.max&&"до "+F.max+" ₴",F.rooms&&F.rooms+" кімн.",F.month&&"на місяць",...F.amen.map(k=>META.amen[k])].filter(Boolean).join(" · ");toast(sum?"Підібрано: "+sum:"Показую все",3200);drawChips();load()}catch(e){toast(e.message)}}
 async function load(){const fav=TAB==="fav";$("#list").innerHTML='<div class="sk"></div><div class="sk"></div>';const p=new URLSearchParams({q:fav?"":F.q,city:F.city,district:F.district,max:F.max,rooms:F.rooms,guests:F.guests,month:F.month?1:0,sort:F.near&&F.sort==="price"?"dist":F.sort,amen:F.amen.join(",")});if(F.instant)p.set("instant",1);if(F.top)p.set("top",1);
  if(F.near&&!fav){p.set("lat",F.near[0]);p.set("lon",F.near[1]);p.set("radius",F.near[2])}if(fav)p.set("fav",1);
- let r=[];try{r=await api("/api/listings?"+p)}catch(e){if(fav?TAB!=="fav":TAB!=="search")return;return $("#list").innerHTML=`<div class="empty"><b>⚠️</b>Не вдалося завантажити оголошення.<br><span class="sm">${esc(e.message)}</span><br><br><button class="cta" data-a="retry">Спробувати знову</button></div>`}if(fav?TAB!=="fav":TAB!=="search")return;LAST=r;
+ let r=[];try{r=await api("/api/listings?"+p)}catch(e){if(!$("#list")||(fav?TAB!=="fav":TAB!=="search"))return;return $("#list").innerHTML=`<div class="empty"><b>⚠️</b>Не вдалося завантажити оголошення.<br><span class="sm">${esc(e.message)}</span><br><br><button class="cta" data-a="retry">Спробувати знову</button></div>`}if(!$("#list")||(fav?TAB!=="fav":TAB!=="search"))return;LAST=r;
  $("#meta").textContent=r.length?`Знайдено: ${r.length}`:"";
  $("#list").innerHTML=r.length?r.map((l,i)=>card(l,i)).join(""):`<div class="empty"><b>${fav?"🤍":"😔"}</b>${fav?"В обраному поки порожньо.<br>Натискайте ❤️ на оголошеннях.":"Нічого не знайдено.<br>Спробуйте змінити фільтри."}${!fav&&(nF()||F.q||F.max)?`<br><br><button class="cta g2" data-a="reset">Скинути фільтри</button>`:""}</div>`}
 const imgs=(l,n)=>Array.from({length:Math.min(l.np,n)},(_,i)=>`<img loading="lazy" alt="" src="/p/${l.id}/${i}">`).join("");
@@ -532,4 +535,5 @@ let t;const mo=new MutationObserver(()=>{cancelAnimationFrame(t);t=raf(()=>{enha
 ["#view","#sheets"].forEach(s=>{const n=q(s);n&&mo.observe(n,{childList:true,subtree:true})});enhance();
 })();
 
-</script></body></html>
+</script><script src="/assets/market.js"></script></body></html>
+

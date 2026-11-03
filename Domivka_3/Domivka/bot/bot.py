@@ -24,10 +24,17 @@ import feat
 import growth
 import tunnel
 import webapp
+import market
+import market_bot
+import business
+import billing
+import deployment
+import cart
+from version import VERSION
 
 ROOT = Path(__file__).resolve().parent.parent
 ENV = ROOT / ".env"
-DATA = ROOT / "data"
+DATA = Path(os.environ.get("DATA_DIR", str(ROOT / "data")))
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 
@@ -161,7 +168,7 @@ async def is_super(host: int) -> bool:
 def menu_rows(u: dict):
     host = u["role"] == "host"
     r = [[("📱 Відкрити Домівку", "webapp:" + WEBAPP_URL)]] if WEBAPP_URL else []
-    return r + [[("🔍 Пошук", "m:s"), ("📅 Бронювання", "m:t")], [("❤️ Обране", "m:f"), ("💬 Чати", "m:c")],
+    return r + [[("Маркет / сервіси", "mk:services")], [("🔍 Пошук", "m:s"), ("📅 Бронювання", "m:t")], [("❤️ Обране", "m:f"), ("💬 Чати", "m:c")],
                 [("🏠 Кабінет господаря" if host else "🏠 Здавати житло", "m:host" if host else "m:h"), ("⋯ Ще", "m:more")]]
 
 
@@ -716,6 +723,7 @@ async def set_menu_button():
 async def on_tunnel_url(url: str):
     """Нова публічна адреса Mini App: запам'ятовуємо й оновлюємо кнопку меню."""
     global WEBAPP_URL
+    await deployment.verify_public_app(url, bot.id)
     WEBAPP_URL = url.rstrip("/")
     await set_menu_button()
     logging.info("📱 Mini App готовий: %s (кнопка «Домівка» біля поля введення в чаті з ботом)", WEBAPP_URL)
@@ -750,13 +758,16 @@ async def relay(chat: int, u: dict, text: str):
 
 
 # ───────────────────────── майстер нового оголошення ─────────────────────────
-STEPS = ["title", "city", "district", "price_night", "price_month", "rooms", "guests", "descr", "photos"]
+STEPS = ["title", "property_type", "city", "district", "price_night", "price_month", "rooms", "guests", "descr", "photos"]
+PROPERTY_TYPES = {"1": "apartment", "2": "house", "3": "room", "4": "commercial", "5": "garage", "6": "land", "7": "other"}
 PROMPT = {"title": "Заголовок оголошення (5–120 символів):", "city": "Місто:", "district": "Район:", "price_night": "Ціна за ніч, ₴:",
           "price_month": "Ціна за місяць, ₴ (або «-», якщо на місяць не здаєте):", "rooms": "Кількість кімнат:", "guests": "Максимум гостей:",
           "descr": "Опишіть житло або натисніть кнопку, і AI напише опис за вас:", "photos": "Надішліть фото (до 6). Потім натисніть «Опублікувати»."}
 
 
 async def ask_step(chat: int, step: str):
+    if step == "property_type":
+        return await say(chat, "Тип нерухомості — надішліть номер:\n1. Квартира\n2. Будинок\n3. Кімната\n4. Комерційна нерухомість\n5. Гараж\n6. Ділянка\n7. Інше")
     rows = {"descr": [[("✨ Написати AI", "nw:ai")]], "photos": [[("✅ Опублікувати", "nw:pub")]]}.get(step, [])
     await say(chat, PROMPT[step], rows + [[("✖ Скасувати", "m:m")]])
 
@@ -773,6 +784,13 @@ async def new_step(chat: int, u: dict, m: Message):
         return await say(chat, f"Фото додано ({len(s['d']['photos'])}/6).", [[("✅ Опублікувати", "nw:pub")]])
     if not t:
         return
+    if step == "property_type":
+        value = PROPERTY_TYPES.get(t, t.lower())
+        if value not in PROPERTY_TYPES.values():
+            return await ask_step(chat, step)
+        s["d"][step] = value
+        s["step"] = "city"
+        return await ask_step(chat, "city")
     if step in ("price_night", "price_month", "rooms", "guests"):
         if not (step == "price_month" and t == "-"):
             if not (t.isdigit() and int(t) > 0):
@@ -818,6 +836,7 @@ async def create_listing(u: dict, d: dict):
     lid = await db.ex("insert into listings(owner,title,city,district,price_night,price_month,rooms,guests,descr,photos,blocked) values(?,?,?,?,?,?,?,?,?,?,?)",
                       (u["id"], d["title"], d["city"], d["district"], d["price_night"], d.get("price_month"), d["rooms"], d["guests"], d.get("descr", ""), json.dumps(d.get("photos", [])), blocked))
     extra = {}
+    extra["property_type"] = d.get("property_type") if d.get("property_type") in PROPERTY_TYPES.values() else "apartment"
     if d.get("amen"):
         extra["amen"] = ",".join(k for k in d["amen"] if k in feat.AMEN)
     if d.get("min_nights"):
@@ -1079,6 +1098,14 @@ async def register(c: CallbackQuery, role: str):
 async def on_message(m: Message):
     if m.chat.type != "private" or not m.from_user:
         return
+    if await billing.successful(m):
+        return
+    if (m.text or "").split("@", 1)[0].strip() == "/paysupport":
+        return await m.answer(billing.support_text())
+    if (m.text or "").split("@", 1)[0].strip() == "/version":
+        return await m.answer(f"Domivka {VERSION} · два маркети · /start")
+    if await market_bot.on_message(m):
+        return
     uid, chat, text = m.from_user.id, m.chat.id, (m.text or "").strip()
     try:
         u = await db.one("select * from users where id=?", (uid,))
@@ -1217,6 +1244,8 @@ async def help_(chat: int):
 
 @dp.pre_checkout_query()
 async def on_pre(q: PreCheckoutQuery):
+    if await billing.pre_checkout(q):
+        return
     ok = False
     if q.invoice_payload.startswith("bk:"):
         b = await db.one("select * from bookings where id=?", (int(q.invoice_payload[3:]),))
@@ -1230,6 +1259,8 @@ async def on_pre(q: PreCheckoutQuery):
 
 @dp.callback_query()
 async def on_cb(c: CallbackQuery):
+    if await market_bot.on_callback(c):
+        return
     await c.answer()
     chat, uid = c.message.chat.id, c.from_user.id
     try:
@@ -1617,9 +1648,15 @@ async def background():
                     await tell(b["owner"], f"🎉 Гість виїхав: +{growth.PTS['host_stay']} балів у Клубі!")
                 if r.get("ref"):
                     await tell(r["ref"], f"🎉 Ваш друг завершив проживання: +{growth.PTS['ref_stay']} балів!")
-            if last_backup != today():
+            if getattr(db, 'is_postgres', deployment.postgres_storage)():
+                if last_backup != 'postgres':
+                    logging.info('PostgreSQL storage: local SQLite backup disabled. Configure retention and recovery with the database provider; no local DB file is copied.')
+                    last_backup = 'postgres'
+            elif last_backup != today():
                 (DATA / "backups").mkdir(exist_ok=True)
-                shutil.copy(DATA / "domivka.db", DATA / "backups" / f"domivka_{today()}.db")
+                # Online backup includes committed WAL data consistently.
+                async with db.aiosqlite.connect(str(DATA / "backups" / f"domivka_{today()}.db")) as backup:
+                    await db.DB.backup(backup)
                 for old in sorted((DATA / "backups").glob("*.db"))[:-14]:
                     old.unlink()
                 last_backup = today()
@@ -1631,6 +1668,7 @@ async def background():
 async def main():
     global WEBAPP_URL, bot, SITE, APPROVAL, BOT_USERNAME, ADMINS, PAYMODE, DEPOSIT, COMMISSION, PAY_HOURS, HOST_HOURS, FREE_CANCEL_H, BOOST_PRICE, BOOST_FREE_DAYS, PAY_TOKEN, PAY_REQ
     load_env()
+    deployment.check_config()
     num = lambda k, d: int(re.sub(r"\D", "", os.environ.get(k, "")) or d)
     PAYMODE = os.environ.get("PAYMENT_MODE", "direct").lower()
     if PAYMODE not in ("off", "direct", "manual", "telegram"):
@@ -1651,15 +1689,42 @@ async def main():
     PRO["boost_off"] = min(90, num("PRO_BOOST_DISCOUNT", 20))
     DATA.mkdir(exist_ok=True)
     await db.init(str(DATA / "domivka.db"))
+    await market.setup(sys.modules[__name__])
+    await cart.setup(sys.modules[__name__])
+    await business.setup(sys.modules[__name__])
+    await billing.setup(sys.modules[__name__])
+    market_bot.setup(sys.modules[__name__])
     bot = Bot(os.environ["BOT_TOKEN"], default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     try:
         me = await bot.get_me()
     except Exception:
         sys.exit("Токен не підійшов. Перевірте BOT_TOKEN у файлі .env (скопіюйте його з @BotFather ще раз).")
     BOT_USERNAME = me.username or ""
+    expected = os.environ.get("EXPECTED_BOT_USERNAME", "").lstrip("@").lower()
+    if expected and expected != BOT_USERNAME.lower():
+        sys.exit("BOT_TOKEN належить іншому боту. Перевірте EXPECTED_BOT_USERNAME і окремий .env.")
     feat.setup(sys.modules[__name__])
-    await bot.set_my_commands([BotCommand(command="menu", description="Головне меню"), BotCommand(command="app", description="Відкрити додаток"), BotCommand(command="help", description="Допомога")])
-    explicit = os.environ.get("WEBAPP_URL", "").rstrip("/")
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Домівка — оберіть свій маркет"),
+        BotCommand(command="account", description="Мій кабінет"),
+        BotCommand(command="club", description="Мій клуб, рівень та бонуси"),
+        BotCommand(command="cart", description="Кошик у продавців"),
+        BotCommand(command="friends", description="Запросити друзів"),
+        BotCommand(command="admin", description="Керування сервісом"),
+        BotCommand(command="paysupport", description="Допомога з оплатою Stars"),
+        BotCommand(command="version", description="Версія запущеного сервісу"),
+        BotCommand(command="services", description="Нерухомість або маркет"),
+        BotCommand(command="market", description="Знайти товари"),
+        BotCommand(command="sell", description="Продати річ"),
+        BotCommand(command="import", description="Імпорт свого оголошення за посиланням"),
+        BotCommand(command="moderate", description="Модерація для адміністратора"),
+        BotCommand(command="orders", description="Мої покупки та продажі"),
+        BotCommand(command="rent", description="Оренда нерухомості"),
+        BotCommand(command="settings", description="Мова та налаштування"),
+        BotCommand(command="menu", description="Меню нерухомості"),
+        BotCommand(command="app", description="Відкрити мініапп"),
+        BotCommand(command="help", description="Допомога")])
+    explicit = deployment.public_origin()
     if os.environ.get("WEBAPP", "on").lower() != "off":
         try:
             port = await webapp.start(sys.modules[__name__], num("WEBAPP_PORT", 8080))
@@ -1670,11 +1735,32 @@ async def main():
         elif os.environ.get("TUNNEL", "auto").lower() != "off":
             asyncio.create_task(tunnel.supervise(port, on_tunnel_url))
             logging.info("Готую адресу для Mini App (перший раз ~1 хвилина, завантажується cloudflared)…")
-    asyncio.create_task(background())
-    logging.info("Бот @%s запущено. Адміністраторів: %d. Режим оплати: %s. Не закривайте це вікно.", BOT_USERNAME, len(ADMINS), PAYMODE)
-    await bot.delete_webhook(drop_pending_updates=False)
-    await dp.start_polling(bot)
+    worker = asyncio.create_task(background())
+    logging.info("Domivka %s — marketplace, business and cart enabled", VERSION)
+    mode = deployment.execution_mode()
+    try:
+        if mode == 'webhook':
+            await dp.emit_startup(bot=bot)
+            await bot.set_webhook(url=deployment.webhook_url(), secret_token=deployment.webhook_secret(),
+                                  allowed_updates=dp.resolve_used_update_types(), max_connections=1,
+                                  drop_pending_updates=False)
+            logging.info('Bot @%s running in awaited webhook mode; HTTP updates finish before acknowledgement.', BOT_USERNAME)
+            await deployment.wait_for_shutdown()
+        else:
+            await bot.delete_webhook(drop_pending_updates=False)
+            logging.info("Бот @%s запущено через polling. Адміністраторів: %d. Режим оплати: %s.", BOT_USERNAME, len(ADMINS), PAYMODE)
+            await dp.start_polling(bot)
+    finally:
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+        # Keep the registered webhook on shutdown: a replacement instance may
+        # already be serving it. Telegram retains updates through Render sleep.
+        await webapp.stop()
+        if mode == 'webhook':
+            await dp.emit_shutdown(bot=bot)
+        await bot.session.close()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+
