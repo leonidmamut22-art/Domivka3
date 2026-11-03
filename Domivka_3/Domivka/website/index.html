@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Домівка — оренда квартир на ніч і на місяць</title>
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600&family=Unbounded:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root{--spruce:#12332b;--mist:#edf2ef;--lamp:#f2b544;--ink:#17201d;--card:#fff;--mut:#5d6b66;--line:#d7e0dc;--bad:#b3261e}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--mist:#0e1714;--ink:#e8efec;--card:#16221e;--mut:#9db0a9;--line:#27382f}}
+*{box-sizing:border-box}html,body{margin:0}
+body{font:16px/1.5 Onest,system-ui,sans-serif;background:var(--mist);color:var(--ink);padding-top:env(safe-area-inset-top,0)}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}:focus-visible{outline:3px solid var(--lamp);outline-offset:2px}
+.top{display:flex;justify-content:space-between;align-items:center;padding:14px 5vw;background:var(--spruce);color:#fff}
+.logo{font:700 20px Unbounded,sans-serif;background:none;border:0;color:#fff}.logo i{color:var(--lamp);font-style:normal}
+.nav{display:flex;gap:8px}
+.btn{border:0;border-radius:12px;padding:10px 16px;background:var(--lamp);color:#241a00;font-weight:600}
+.btn.ghost{background:transparent;color:inherit;border:1px solid var(--line)}.top .btn.ghost{color:#fff;border-color:#ffffff55}
+.btn.sm{padding:6px 12px;font-size:14px}.btn[disabled]{opacity:.5}
+.hero{background:var(--spruce);color:#fff;padding:48px 5vw 64px}
+.hero h1{font:700 clamp(28px,5vw,52px)/1.1 Unbounded,sans-serif;max-width:16ch;margin:0 0 24px}
+.ask{display:flex;gap:8px;max-width:760px;background:#fff;border-radius:18px;padding:8px;box-shadow:0 8px 40px #0006}
+.ask input{flex:1;border:0;background:none;padding:12px;color:#17201d;font-size:17px;min-width:0}
+.ask input:focus{outline:none}.ask:focus-within{outline:3px solid var(--lamp)}
+.note{margin:12px 0 0;color:#cfe0d9;min-height:24px}
+.wrap{padding:24px 5vw;max-width:1280px;margin:auto}
+.filters{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:18px}
+.filters select,.filters input[type=number]{padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.seg button{border:0;background:var(--card);padding:9px 14px}.seg .on{background:var(--spruce);color:#fff}
+.cmp{background:var(--card);border-radius:16px;padding:16px 18px;margin-bottom:22px;border:1px solid var(--line)}
+.cmp h3{margin:0 0 10px;font:600 16px Onest}
+.bar{display:grid;grid-template-columns:130px 1fr 90px;gap:10px;align-items:center;width:100%;border:0;background:none;padding:4px 0;text-align:left}
+.bar b{display:block;height:12px;border-radius:6px;background:var(--lamp);transition:width .5s}.bar.on b{background:var(--spruce)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:20px}
+.card{background:var(--card);border-radius:18px;overflow:hidden;border:1px solid var(--line);cursor:pointer;position:relative}
+.card:hover{border-color:var(--spruce)}
+.ph{height:180px;background-size:cover;background-position:center;position:relative}
+.tag{position:absolute;left:10px;top:10px;background:var(--lamp);color:#241a00;border-radius:8px;padding:2px 8px;font-size:13px;font-weight:600}
+.heart{position:absolute;right:10px;top:10px;border:0;border-radius:50%;width:36px;height:36px;background:#fffd;color:#17201d}
+.heart.on{color:#d0213b}
+.cb{padding:12px 14px 14px}.cb h4{margin:0 0 2px;font-size:16px}.mut{color:var(--mut);font-size:14px}
+.pr{margin-top:8px;font-weight:600}.pr s{color:var(--mut);font-weight:400;margin-right:6px}
+dialog{border:0;border-radius:20px;padding:0;max-width:min(720px,94vw);width:100%;background:var(--card);color:var(--ink)}
+dialog::backdrop{background:#0009}.dlg{padding:22px;max-height:88vh;overflow:auto}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+label{display:block;font-size:14px;color:var(--mut);margin:10px 0 4px}
+.dlg input,.dlg select,.dlg textarea{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--mist)}
+.gal{display:flex;gap:6px;overflow-x:auto;margin-bottom:12px}.gal div{flex:0 0 70%;height:220px;border-radius:12px;background-size:cover;background-position:center}
+.err{color:var(--bad);min-height:22px;font-size:14px}.ok{color:#18794e}
+.item{border:1px solid var(--line);border-radius:12px;padding:12px;margin:8px 0;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.st{font-size:13px;font-weight:600}
+.hide{display:none!important}
+@media(max-width:600px){.bar{grid-template-columns:90px 1fr 76px}.row{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<header class="top">
+  <button class="logo" onclick="show('home')">Домівка<i>.</i></button>
+  <nav class="nav"><a class="btn ghost sm" id="bTg" target="_blank" rel="noopener" style="text-decoration:none">✈ Telegram-бот</a><button class="btn ghost sm hide" id="bFav">♥ Обране</button><button class="btn ghost sm hide" id="bCab">Кабінет</button><button class="btn sm" id="bAuth">Увійти</button></nav>
+</header>
+
+<section id="home">
+  <div class="hero">
+    <h1>Знайдіть житло, яке підходить саме вам</h1>
+    <form class="ask" id="askF"><input id="ask" aria-label="Опишіть, що шукаєте" placeholder="Наприклад: квартира на місяць у центрі до 15 000 ₴"><button class="btn">Підібрати</button></form>
+    <p class="note" id="aiNote"></p>
+  </div>
+  <div class="wrap">
+    <div class="filters">
+      <select id="fCity" aria-label="Місто"></select>
+      <select id="fRooms" aria-label="Кімнати"><option value="">Кімнат: будь-яка</option><option>1</option><option>2</option><option>3</option></select>
+      <input type="number" id="fMax" min="0" step="100" placeholder="Макс. ціна ₴" aria-label="Максимальна ціна">
+      <input type="number" id="fGuests" min="1" placeholder="Гостей" style="width:100px" aria-label="Гостей">
+      <div class="seg" role="group" aria-label="Тип оренди"><button id="mN" class="on">За ніч</button><button id="mM">За місяць</button></div>
+      <button class="btn ghost sm" id="fReset">Скинути</button>
+    </div>
+    <div class="cmp"><h3>Середня ціна за районами <span class="mut" id="cmpU"></span></h3><div id="cmp"></div></div>
+    <div class="grid" id="grid"></div>
+    <p class="mut hide" id="empty">Нічого не знайдено. Змініть фільтри або опишіть запит інакше.</p>
+  </div>
+</section>
+
+<section id="cab" class="wrap hide"></section>
+
+<dialog id="dl"><div class="dlg" id="dlb"></div></dialog>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script>
+// ====== НАЛАШТУВАННЯ (заповніть після створення проєкту Supabase) ======
+const SUPABASE_URL='https://YOUR-PROJECT.supabase.co';
+const SUPABASE_ANON_KEY='YOUR-ANON-KEY';
+const TG_BOT='YOUR_BOT_USERNAME'; // без @
+// =======================================================================
+const sb=supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const uah=n=>Math.round(n).toLocaleString('uk-UA')+' ₴';
+let me=null,prof=null,all=[],favs=new Set(),F={city:'',district:'',rooms:'',max:'',guests:'',month:false};
+const unit=()=>F.month?'/міс':'/ніч';
+const base=l=>F.month?(l.price_month||l.price_night*25):l.price_night;
+const cur=l=>base(l)*(100-l.discount_pct)/100;
+const bg=l=>{if(l.photos?.[0])return `url("${esc(l.photos[0])}")`;let h=0;for(const c of l.id)h=(h*31+c.charCodeAt(0))%360;return `linear-gradient(135deg,hsl(${150+h%60} 35% 28%),hsl(${30+h%30} 70% 60%))`};
+
+async function init(){
+  const {data:{session}}=await sb.auth.getSession();await setUser(session?.user);
+  sb.auth.onAuthStateChange((_,s)=>setUser(s?.user));
+  const {data,error}=await sb.from('listings').select('*').eq('active',true).order('created_at',{ascending:false});
+  if(error){$('#grid').innerHTML='<p class="err">Не вдалося завантажити оголошення. Перевірте налаштування Supabase.</p>';return}
+  all=data;const cities=[...new Set(all.map(l=>l.city))];
+  $('#fCity').innerHTML='<option value="">Усі міста</option>'+cities.map(c=>`<option>${esc(c)}</option>`).join('');
+  F.city=cities[0]||'';$('#fCity').value=F.city;render();
+}
+async function setUser(u){
+  me=u||null;prof=null;favs=new Set();
+  if(me){const [p,f]=await Promise.all([sb.from('profiles').select('*').eq('id',me.id).single(),sb.from('favorites').select('listing_id')]);prof=p.data;favs=new Set((f.data||[]).map(x=>x.listing_id))}
+  $('#bAuth').textContent=me?'Вийти':'Увійти';$('#bCab').classList.toggle('hide',!me);$('#bFav').classList.toggle('hide',!me);
+  render();
+}
+function filtered(skipDistrict){
+  return all.filter(l=>(!F.city||l.city===F.city)&&(skipDistrict||!F.district||l.district===F.district)&&(!F.rooms||l.rooms==F.rooms)&&(!F.guests||l.guests>=F.guests)&&(!F.max||cur(l)<=F.max));
+}
+function render(){
+  const list=filtered(),pool=filtered(true);
+  $('#mN').classList.toggle('on',!F.month);$('#mM').classList.toggle('on',F.month);
+  const by={};pool.forEach(l=>(by[l.district]??=[]).push(cur(l)));
+  const avg=Object.entries(by).map(([d,a])=>[d,a.reduce((x,y)=>x+y,0)/a.length,a.length]).sort((a,b)=>a[1]-b[1]);
+  const mx=Math.max(...avg.map(a=>a[1]),1);
+  $('#cmpU').textContent=F.month?'за місяць':'за ніч';
+  $('#cmp').innerHTML=avg.length?avg.map(([d,v,n])=>`<button class="bar ${F.district===d?'on':''}" data-d="${esc(d)}" aria-pressed="${F.district===d}"><span>${esc(d)} <span class="mut">(${n})</span></span><b style="width:${v/mx*100}%"></b><span>${uah(v)}</span></button>`).join(''):'<span class="mut">Немає даних</span>';
+  $('#grid').innerHTML=list.map(l=>`<article class="card" data-id="${l.id}"><div class="ph" style="background-image:${bg(l)}">${l.discount_pct?`<span class="tag">−${l.discount_pct}%</span>`:''}<button class="heart ${favs.has(l.id)?'on':''}" data-f="${l.id}" aria-label="В обране">♥</button></div><div class="cb"><h4>${esc(l.title)}</h4><div class="mut">${esc(l.city)}, ${esc(l.district)} · ${l.rooms} кімн. · до ${l.guests} гостей</div><div class="pr">${l.discount_pct?`<s>${uah(base(l))}</s>`:''}${uah(cur(l))}<span class="mut"> ${unit()}</span></div></div></article>`).join('');
+  $('#empty').classList.toggle('hide',list.length>0);
+}
+$('#cmp').onclick=e=>{const b=e.target.closest('.bar');if(b){F.district=F.district===b.dataset.d?'':b.dataset.d;render()}};
+$('#grid').onclick=async e=>{
+  const h=e.target.closest('.heart');
+  if(h){if(!me)return authDlg();const id=h.dataset.f;
+    if(favs.has(id)){await sb.from('favorites').delete().eq('listing_id',id);favs.delete(id)}else{await sb.from('favorites').insert({user_id:me.id,listing_id:id});favs.add(id)}
+    return render()}
+  const c=e.target.closest('.card');if(c)detail(all.find(l=>l.id===c.dataset.id));
+};
+$('#fCity').onchange=e=>{F.city=e.target.value;F.district='';render()};
+$('#fRooms').onchange=e=>{F.rooms=e.target.value;render()};
+$('#fMax').oninput=e=>{F.max=+e.target.value||'';render()};
+$('#fGuests').oninput=e=>{F.guests=+e.target.value||'';render()};
+$('#mN').onclick=()=>{F.month=false;render()};$('#mM').onclick=()=>{F.month=true;render()};
+$('#fReset').onclick=()=>{F={...F,district:'',rooms:'',max:'',guests:''};$('#fRooms').value=$('#fMax').value=$('#fGuests').value='';render()};
+$('#bFav').onclick=()=>{show('home');const ids=[...favs];$('#grid').innerHTML=all.filter(l=>ids.includes(l.id)).map(l=>`<article class="card" data-id="${l.id}"><div class="ph" style="background-image:${bg(l)}"></div><div class="cb"><h4>${esc(l.title)}</h4><div class="mut">${esc(l.district)}</div></div></article>`).join('')||'<p class="mut">В обраному поки порожньо.</p>'};
+
+// AI-підбір
+$('#askF').onsubmit=async e=>{
+  e.preventDefault();const t=$('#ask').value.trim();if(!t)return;
+  $('#aiNote').textContent='Підбираю варіанти…';
+  const {data,error}=await sb.functions.invoke('api',{body:{action:'search',text:t,districts:[...new Set(all.map(l=>l.district))]}});
+  if(error||!data||data.error){$('#aiNote').textContent='Помічник зараз недоступний — скористайтеся фільтрами нижче.';return}
+  F.district=data.district&&all.some(l=>l.district===data.district)?data.district:'';
+  F.max=data.max_price||'';F.rooms=data.rooms||'';F.guests=data.guests||'';F.month=!!data.month;
+  $('#fRooms').value=F.rooms;$('#fMax').value=F.max;$('#fGuests').value=F.guests;
+  $('#aiNote').textContent=data.summary||'';render();$('#cmp').scrollIntoView({behavior:'smooth'});
+};
+
+// Деталі + бронювання
+function detail(l){
+  const tomorrow=new Date(Date.now()+864e5).toISOString().slice(0,10);
+  $('#dlb').innerHTML=`<div class="gal">${(l.photos?.length?l.photos:[0]).map(p=>`<div style="background-image:${p?`url('${esc(p)}')`:bg(l)}"></div>`).join('')}</div>
+  <h2 style="margin:0">${esc(l.title)}</h2><div class="mut">${esc(l.city)}, ${esc(l.district)} · ${l.rooms} кімн. · до ${l.guests} гостей</div>
+  <p>${esc(l.description)}</p><p class="mut">${(l.amenities||[]).map(esc).join(' · ')}</p><p class="err" id="occ"></p>
+  <div class="row"><div><label>Заїзд</label><input type="date" id="ci" min="${tomorrow}" value="${tomorrow}"></div><div><label>Виїзд</label><input type="date" id="co" min="${tomorrow}"></div></div>
+  <label>Гостей</label><input type="number" id="bg" min="1" max="${l.guests}" value="1">
+  <p><b id="tot">Оберіть дати</b></p><p class="err" id="be"></p>
+  <button class="btn" id="bk">Забронювати</button> <button class="btn ghost" onclick="dl.close()">Закрити</button>`;
+  const calc=()=>{const n=Math.round((new Date($('#co').value)-new Date($('#ci').value))/864e5);if(!(n>0)){$('#tot').textContent='Оберіть дати';return 0}
+    const t=n>=28&&l.price_month?l.price_month*n/30*(100-l.discount_pct)/100:n*l.price_night*(100-l.discount_pct)/100;
+    $('#tot').textContent=`${n} дн. · разом ${uah(t)}`;return n};
+  $('#ci').onchange=()=>{$('#co').min=$('#ci').value;calc()};$('#co').onchange=calc;
+  sb.rpc('booked_ranges',{lid:l.id}).then(({data})=>{if(data?.length)$('#occ').textContent='Зайняті дати: '+data.map(r=>`${r.check_in} – ${r.check_out}`).join('; ')});
+  $('#bk').onclick=async()=>{
+    if(!me){dl.close();return authDlg()}
+    if(!calc()){$('#be').textContent='Оберіть коректні дати.';return}
+    $('#bk').disabled=true;
+    const {data,error}=await sb.from('bookings').insert({listing_id:l.id,guest:me.id,check_in:$('#ci').value,check_out:$('#co').value,guests:+$('#bg').value||1}).select().single();
+    if(error){$('#bk').disabled=false;$('#be').textContent=error.code==='23P01'?'На ці дати житло вже зайняте. Оберіть інші.':'Не вдалося забронювати: '+error.message;return}
+    const r=await sb.functions.invoke('api',{body:{action:'booking',booking_id:data.id}});const h=r.data?.host;
+    $('#dlb').innerHTML=`<h2>Заявку надіслано ✓</h2><p>Господар отримав повідомлення та підтвердить бронювання у кабінеті. Статус видно у розділі «Кабінет».</p><p><b>Разом: ${uah(data.total)}</b></p>${h?`<p>Контакти господаря: ${esc(h.name||'')} ${esc(h.phone||'')}</p>`:''}<button class="btn" onclick="dl.close()">Готово</button>`;
+  };
+  dl.showModal();
+}
+
+// Реєстрація / вхід
+function authDlg(){
+  $('#dlb').innerHTML=`<h2 style="margin-top:0">Вхід або реєстрація</h2><div class="seg"><button id="tL" class="on">Вхід</button><button id="tR">Реєстрація</button></div>
+  <div id="rf" class="hide"><label>Ім'я</label><input id="an" autocomplete="name"><label>Телефон</label><input id="ap" type="tel" autocomplete="tel" placeholder="+380…"><label>Я</label><select id="ar"><option value="guest">Шукаю житло</option><option value="host">Здаю житло</option></select></div>
+  <label>Email</label><input id="ae" type="email" autocomplete="email"><label>Пароль (мінімум 8 символів)</label><input id="aw" type="password" autocomplete="current-password">
+  <p class="err" id="ax"></p><button class="btn" id="go">Увійти</button> <button class="btn ghost" onclick="dl.close()">Скасувати</button>`;
+  let reg=false;
+  $('#tL').onclick=()=>{reg=false;$('#rf').classList.add('hide');$('#tL').classList.add('on');$('#tR').classList.remove('on');$('#go').textContent='Увійти'};
+  $('#tR').onclick=()=>{reg=true;$('#rf').classList.remove('hide');$('#tR').classList.add('on');$('#tL').classList.remove('on');$('#go').textContent='Створити акаунт'};
+  $('#go').onclick=async()=>{
+    const email=$('#ae').value.trim(),password=$('#aw').value;$('#ax').className='err';
+    if(!email||password.length<8){$('#ax').textContent='Введіть email та пароль від 8 символів.';return}
+    if(reg){
+      if(!$('#an').value.trim()||$('#ap').value.replace(/\D/g,'').length<10){$('#ax').textContent="Вкажіть ім'я та телефон.";return}
+      const {error}=await sb.auth.signUp({email,password,options:{data:{full_name:$('#an').value.trim(),phone:$('#ap').value.trim(),role:$('#ar').value}}});
+      if(error){$('#ax').textContent=error.message;return}
+      $('#ax').className='ok';$('#ax').textContent='Готово! Підтвердіть email за листом, потім увійдіть.';
+    }else{
+      const {error}=await sb.auth.signInWithPassword({email,password});
+      if(error){$('#ax').textContent='Невірний email або пароль, або email ще не підтверджено.';return}
+      dl.close();
+    }
+  };
+  dl.showModal();
+}
+$('#bAuth').onclick=()=>me?sb.auth.signOut().then(()=>show('home')):authDlg();
+const show=v=>{$('#home').classList.toggle('hide',v!=='home');$('#cab').classList.toggle('hide',v!=='cab');scrollTo(0,0);if(v==='home')render()};
+$('#bCab').onclick=()=>{show('cab');cabinet()};
+
+// Кабінет
+async function cabinet(){
+  const host=prof?.role==='host';
+  const {data:trips}=await sb.from('bookings').select('*,listings(title)').eq('guest',me.id).order('created_at',{ascending:false});
+  const stl={pending:'очікує підтвердження',confirmed:'підтверджено',cancelled:'відхилено'};
+  let h=`<h2>Кабінет</h2><h3>Мої бронювання</h3>`+((trips||[]).map(b=>`<div class="item"><span>${esc(b.listings.title)}<br><span class="mut">${b.check_in} → ${b.check_out} · ${uah(b.total)}</span></span><span class="st">${stl[b.status]}</span></div>`).join('')||'<p class="mut">Поки немає бронювань.</p>');
+  if(host){
+    const [{data:mine},{data:inc}]=await Promise.all([
+      sb.from('listings').select('*').eq('owner',me.id).order('created_at',{ascending:false}),
+      sb.from('bookings').select('*,listings!inner(title,owner),profiles:guest(full_name,phone)').eq('listings.owner',me.id).order('created_at',{ascending:false})]);
+    h+=`<p>Керувати оголошеннями та заявками зручніше в <a href="https://t.me/${TG_BOT}" target="_blank" rel="noopener">Telegram-боті</a>.</p>
+    <h3>Заявки на мої оголошення</h3>`+((inc||[]).map(b=>`<div class="item"><span>${esc(b.listings.title)}<br><span class="mut">${b.check_in} → ${b.check_out} · ${uah(b.total)} · ${esc(b.profiles?.full_name)} ${esc(b.profiles?.phone)}</span></span><span>${b.status==='pending'?`<button class="btn sm" data-s="confirmed" data-b="${b.id}">Підтвердити</button> <button class="btn ghost sm" data-s="cancelled" data-b="${b.id}">Відхилити</button>`:`<span class="st">${stl[b.status]}</span>`}</span></div>`).join('')||'<p class="mut">Заявок поки немає.</p>')+
+    `<h3>Мої оголошення</h3>`+(mine||[]).map(l=>`<div class="item"><span>${esc(l.title)}<br><span class="mut">${uah(l.price_night)}/ніч · знижка ${l.discount_pct}%</span></span><span><input type="number" min="0" max="70" value="${l.discount_pct}" style="width:70px" data-d="${l.id}" aria-label="Знижка %"> <button class="btn ghost sm" data-t="${l.id}" data-a="${l.active}">${l.active?'Сховати':'Показати'}</button></span></div>`).join('')+
+    `<button class="btn" id="nl">+ Нове оголошення</button>`;
+  }else h+=`<p class="mut">Хочете здавати житло? Зареєструйтесь як орендодавець.</p>`;
+  $('#cab').innerHTML=h;
+}
+$('#cab').onclick=async e=>{
+  const s=e.target.closest('[data-s]');if(s){await sb.from('bookings').update({status:s.dataset.s}).eq('id',s.dataset.b);return cabinet()}
+  const t=e.target.closest('[data-t]');if(t){await sb.from('listings').update({active:t.dataset.a!=='true'}).eq('id',t.dataset.t);await reload();return cabinet()}
+  if(e.target.id==='nl')newListing();
+};
+$('#cab').onchange=async e=>{const d=e.target.dataset.d;if(d){await sb.from('listings').update({discount_pct:Math.min(70,Math.max(0,+e.target.value||0))}).eq('id',d);await reload()}};
+async function reload(){const {data}=await sb.from('listings').select('*').eq('active',true).order('created_at',{ascending:false});all=data||all}
+
+function newListing(){
+  $('#dlb').innerHTML=`<h2 style="margin-top:0">Нове оголошення</h2>
+  <label>Заголовок</label><input id="nt" maxlength="120">
+  <div class="row"><div><label>Місто</label><input id="nc" value="Луцьк"></div><div><label>Район</label><input id="nd" placeholder="Центр"></div></div>
+  <div class="row"><div><label>Ціна за ніч, ₴</label><input id="np" type="number" min="1"></div><div><label>Ціна за місяць, ₴ (необов'язково)</label><input id="nm" type="number" min="1"></div></div>
+  <div class="row"><div><label>Кімнат</label><input id="nr" type="number" min="1" value="1"></div><div><label>Гостей</label><input id="ng" type="number" min="1" value="2"></div></div>
+  <label>Зручності (через кому)</label><input id="na" placeholder="wifi, кондиціонер, паркінг">
+  <label>Опис</label><textarea id="ns" rows="4"></textarea><button class="btn ghost sm" id="ai">✨ Написати опис за допомогою AI</button>
+  <label>Фото (до 6)</label><input id="nf" type="file" accept="image/*" multiple>
+  <p class="err" id="ne"></p><button class="btn" id="sv">Опублікувати</button> <button class="btn ghost" onclick="dl.close()">Скасувати</button>`;
+  $('#ai').onclick=async()=>{
+    $('#ai').disabled=true;$('#ai').textContent='Пишу…';
+    const {data}=await sb.functions.invoke('api',{body:{action:'describe',data:{title:$('#nt').value,city:$('#nc').value,district:$('#nd').value,rooms:$('#nr').value,guests:$('#ng').value,amenities:$('#na').value,notes:$('#ns').value}}});
+    $('#ai').disabled=false;$('#ai').textContent='✨ Написати опис за допомогою AI';
+    if(data?.text)$('#ns').value=data.text;else $('#ne').textContent='AI зараз недоступний, напишіть опис вручну.';
+  };
+  $('#sv').onclick=async()=>{
+    const v=i=>$(i).value.trim();
+    if(v('#nt').length<5||!v('#nd')||!(+v('#np')>0)){$('#ne').textContent='Заповніть заголовок, район і ціну.';return}
+    $('#sv').disabled=true;$('#ne').textContent='Завантажую…';
+    const urls=[];
+    for(const f of [...$('#nf').files].slice(0,6)){
+      if(f.size>5e6){$('#ne').textContent='Фото більше 5 МБ пропущено.';continue}
+      const p=`${me.id}/${Date.now()}_${urls.length}`;
+      const {error}=await sb.storage.from('photos').upload(p,f);
+      if(!error)urls.push(sb.storage.from('photos').getPublicUrl(p).data.publicUrl);
+    }
+    const {error}=await sb.from('listings').insert({owner:me.id,title:v('#nt'),city:v('#nc'),district:v('#nd'),price_night:+v('#np'),price_month:+v('#nm')||null,rooms:+v('#nr')||1,guests:+v('#ng')||2,description:v('#ns'),amenities:v('#na').split(',').map(s=>s.trim()).filter(Boolean),photos:urls});
+    if(error){$('#sv').disabled=false;$('#ne').textContent='Помилка: '+error.message;return}
+    dl.close();await reload();cabinet();
+  };
+  dl.showModal();
+}
+$('#bTg').href='https://t.me/'+TG_BOT;
+init();
+</script>
+</body>
+</html>

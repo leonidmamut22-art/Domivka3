@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Домівка — адмін-панель</title>
+<style>
+:root{--bg:#edf2ef;--card:#fff;--ink:#17201d;--mut:#5d6b66;--line:#d7e0dc;--sp:#12332b;--lamp:#f2b544;--bad:#b3261e}
+@media(prefers-color-scheme:dark){:root{--bg:#0e1714;--card:#16221e;--ink:#e8efec;--mut:#9db0a9;--line:#27382f}}
+*{box-sizing:border-box}body{margin:0;font:15px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+button,input{font:inherit;color:inherit}button{cursor:pointer}:focus-visible{outline:3px solid var(--lamp)}
+header{background:var(--sp);color:#fff;padding:14px 4vw;display:flex;justify-content:space-between;align-items:center}
+.b{border:0;border-radius:10px;padding:8px 14px;background:var(--lamp);color:#241a00;font-weight:600}
+.b.g{background:transparent;border:1px solid var(--line);color:inherit}.b.r{background:var(--bad);color:#fff}.b.s{padding:4px 10px;font-size:13px}
+main{padding:20px 4vw;max-width:1300px;margin:auto}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px}
+.st{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px}.st b{font-size:28px;display:block}
+.tabs{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center}.tabs .on{background:var(--sp);color:#fff}
+.tabs input{padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);flex:1;min-width:160px}
+.tw{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:14px}
+table{border-collapse:collapse;width:100%;min-width:760px}th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--mut);font-weight:600;font-size:13px}.tag{font-size:12px;font-weight:700;padding:2px 8px;border-radius:8px;background:var(--line)}.tag.bad{background:var(--bad);color:#fff}
+.box{max-width:360px;margin:12vh auto;background:var(--card);padding:24px;border-radius:16px;border:1px solid var(--line)}
+.box input{width:100%;padding:10px;margin:6px 0 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg)}
+.err{color:var(--bad)}.hide{display:none!important}
+</style>
+</head>
+<body>
+<div id="login" class="box"><h2 style="margin-top:0">Адмін-панель</h2><label>Email</label><input id="e" type="email"><label>Пароль</label><input id="w" type="password"><p class="err" id="le"></p><button class="b" id="go">Увійти</button></div>
+<div id="app" class="hide">
+<header><b>Домівка · адмін</b><button class="b g s" id="out" style="color:#fff">Вийти</button></header>
+<main>
+<div class="stats" id="stats"></div>
+<div class="tabs"><button class="b g on" data-t="listings">Оголошення</button><button class="b g" data-t="users">Користувачі</button><button class="b g" data-t="bookings">Бронювання</button><input id="q" placeholder="Пошук…" aria-label="Пошук"><button class="b s" id="csv">Експорт CSV</button></div>
+<div class="tw"><table id="tb"></table></div>
+</main></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script>
+const SUPABASE_URL='https://YOUR-PROJECT.supabase.co',SUPABASE_ANON_KEY='YOUR-ANON-KEY';
+const sb=supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY),$=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let tab='listings',D={listings:[],users:[],bookings:[]};
+async function boot(){
+  const {data:{user}}=await sb.auth.getUser();if(!user)return;
+  const {data:p}=await sb.from('profiles').select('is_admin').eq('id',user.id).single();
+  if(!p?.is_admin){$('#le').textContent='У цього акаунта немає прав адміністратора.';await sb.auth.signOut();return}
+  $('#login').classList.add('hide');$('#app').classList.remove('hide');await load();
+}
+async function load(){
+  const [l,u,b]=await Promise.all([sb.from('listings').select('*').order('created_at',{ascending:false}),sb.from('profiles').select('*'),
+    sb.from('bookings').select('*,listings(title),profiles:guest(full_name,phone)').order('created_at',{ascending:false})]);
+  D={listings:l.data||[],users:u.data||[],bookings:b.data||[]};
+  const sum=D.bookings.filter(x=>x.status==='confirmed').reduce((a,x)=>a+x.total,0);
+  $('#stats').innerHTML=[['Користувачів',D.users.length],['Орендодавців',D.users.filter(x=>x.role==='host').length],['Оголошень',D.listings.length],['Заблокованих',D.listings.filter(x=>x.blocked).length+D.users.filter(x=>x.banned).length],['Бронювань',D.bookings.length],['Очікують',D.bookings.filter(x=>x.status==='pending').length],['Підтверджено, ₴',sum.toLocaleString('uk-UA')]].map(([k,v])=>`<div class="st"><b>${v}</b>${k}</div>`).join('');
+  draw();
+}
+const COLS={
+  listings:[['Назва',x=>esc(x.title)],['Місто / район',x=>esc(x.city+', '+x.district)],['Ціна',x=>x.price_night],['Власник',x=>x.owner?esc((D.users.find(u=>u.id===x.owner)||{}).full_name||x.owner.slice(0,8)):'демо'],['Статус',x=>x.blocked?'<span class="tag bad">заблоковано</span>':x.active?'активне':'сховане'],['',x=>x.blocked?`<button class="b s" data-l="${x.id}" data-v="false">Розблокувати</button>`:`<button class="b r s" data-l="${x.id}" data-v="true">Заблокувати</button>`]],
+  users:[["Ім'я",x=>esc(x.full_name)],['Телефон',x=>esc(x.phone)],['Роль',x=>x.is_admin?'адмін':x.role],['Telegram',x=>x.tg_chat_id?'підключено':'—'],['Статус',x=>x.banned?'<span class="tag bad">бан</span>':'ок'],['',x=>x.is_admin?'':x.banned?`<button class="b s" data-u="${x.id}" data-v="false">Розбанити</button>`:`<button class="b r s" data-u="${x.id}" data-v="true">Забанити</button>`]],
+  bookings:[['Житло',x=>esc(x.listings?.title)],['Гість',x=>esc((x.profiles?.full_name||'')+' '+(x.profiles?.phone||''))],['Дати',x=>x.check_in+' → '+x.check_out],['Сума',x=>x.total],['Статус',x=>x.status],['Створено',x=>x.created_at.slice(0,10)]]};
+const text=x=>String(x).replace(/<[^>]+>/g,'');
+function rows(){const q=$('#q').value.toLowerCase();return D[tab].filter(x=>!q||JSON.stringify(COLS[tab].map(c=>text(c[1](x)))).toLowerCase().includes(q))}
+function draw(){const c=COLS[tab];$('#tb').innerHTML=`<tr>${c.map(x=>`<th>${x[0]}</th>`).join('')}</tr>`+rows().map(r=>`<tr>${c.map(x=>`<td>${x[1](r)}</td>`).join('')}</tr>`).join('')}
+document.querySelector('.tabs').onclick=e=>{const t=e.target.dataset.t;if(!t)return;tab=t;document.querySelectorAll('.tabs [data-t]').forEach(b=>b.classList.toggle('on',b===e.target));draw()};
+$('#q').oninput=draw;
+$('#tb').onclick=async e=>{const b=e.target.closest('button');if(!b)return;
+  if(b.dataset.l){if(b.dataset.v==='true'&&!confirm('Заблокувати оголошення?'))return;await sb.rpc('admin_block_listing',{lid:b.dataset.l,val:b.dataset.v==='true'})}
+  else if(b.dataset.u){if(b.dataset.v==='true'&&!confirm('Забанити користувача? Його оголошення теж буде заблоковано.'))return;await sb.rpc('admin_ban_user',{uid:b.dataset.u,val:b.dataset.v==='true'})}
+  else return;await load()};
+$('#csv').onclick=()=>{const c=COLS[tab].filter(x=>x[0]);const q=v=>'"'+text(v).replace(/"/g,'""')+'"';
+  const csv='\ufeff'+[c.map(x=>q(x[0])).join(','),...rows().map(r=>c.map(x=>q(x[1](r))).join(','))].join('\n');
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download=`domivka_${tab}_${new Date().toISOString().slice(0,10)}.csv`;a.click()};
+$('#go').onclick=async()=>{const {error}=await sb.auth.signInWithPassword({email:$('#e').value.trim(),password:$('#w').value});if(error){$('#le').textContent='Невірний email або пароль.';return}$('#le').textContent='';boot()};
+$('#out').onclick=async()=>{await sb.auth.signOut();location.reload()};
+boot();
+</script>
+</body>
+</html>
