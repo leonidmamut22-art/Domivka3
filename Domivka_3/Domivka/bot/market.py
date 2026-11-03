@@ -14,6 +14,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import db
+import delivery_service
 
 B = None
 DB = None
@@ -40,6 +41,7 @@ create table if not exists market_orders(
 create unique index if not exists market_one_reservation on market_orders(listing_id) where status in ('pending','accepted','shipped');
 create table if not exists market_reviews(id integer primary key autoincrement,order_id integer not null unique,author integer not null,subject integer not null,rating integer not null check(rating between 1 and 5),text text,created text default(datetime('now')));
 create table if not exists market_delivery(seller_id integer primary key,credentials text not null);
+create table if not exists market_sender_profiles(seller_id integer primary key,body text not null);
 create table if not exists market_uploads(user_id integer not null,file_id text not null,primary key(user_id,file_id));
 """
 
@@ -48,6 +50,9 @@ class MarketError(Exception):
     def __init__(self, message, status=400):
         super().__init__(message)
         self.message, self.status = message, status
+
+
+import cart
 
 
 async def setup(bot_module):
@@ -119,7 +124,8 @@ def blocked(a, b):
 
 
 def listing(lid, uid, private=False):
-    private = private or uid in getattr(B, 'ADMINS', set())
+    import business
+    private = private or uid in getattr(B, 'ADMINS', set()) or business.role(uid) in ('owner','admin','moderator')
     r = one('select l.*,u.name seller_name from market_listings l join users u on u.id=l.seller_id where l.id=? and u.banned=0', (lid,))
     if not r or (r['status'] not in ('active','reserved','sold') and r['seller_id'] != uid and not private):
         raise MarketError('Оголошення недоступне.',404)
@@ -137,7 +143,7 @@ def order(oid, uid):
     r['recipient'] = json.loads(r['recipient'])
     r['parcel'] = json.loads(r.get('parcel') or '{}')
     r['mine_as_seller'] = uid == r['seller_id']
-    return r
+    return cart.enrich_order(DB, r, uid)
 
 
 def chat(cid, uid):
@@ -226,7 +232,7 @@ def _dispatch(uid, path, data, method):
         reviews=q('select r.*,u.name author_name from market_reviews r join users u on u.id=r.author where subject=? order by r.id desc limit 100',(ident,))
         stats=one('select count(*) review_count,avg(rating) rating from market_reviews where subject=?',(ident,))
         seller.update(stats);seller['reviews']=reviews
-        seller['completed']=one("select count(*) n from market_orders where seller_id=? and status='completed'",(ident,))['n']
+        seller['completed']=one("select count(*) n from market_orders where seller_id=? and status='completed' and price>0",(ident,))['n']
         seller['listings']=[listing(r['id'],uid) for r in q("select id from market_listings where seller_id=? and status='active' order by id desc limit 50",(ident,))]
         return {'item':seller}
     if kind == 'favorites':
@@ -261,12 +267,16 @@ def _dispatch(uid, path, data, method):
         if ident:
             o=order(ident,uid)
             if len(parts)==3 and parts[2]=='review' and method=='POST':
+                if not o.get('bundle_primary', True):raise MarketError('Відгук додається до основного замовлення комплекту.',409)
                 if uid!=o['buyer_id'] or o['status']!='completed':raise MarketError('Відгук доступний покупцю після завершення покупки.',403)
                 if one('select 1 from market_reviews where order_id=?',(ident,)):raise MarketError('Відгук уже залишено.',409)
                 DB.execute('insert into market_reviews(order_id,author,subject,rating,text) values(?,?,?,?,?)',(ident,uid,o['seller_id'],integer(data.get('rating'),1,5),text(data.get('text',''),0,2000)))
                 return {'ok':True}
             if method=='GET':return {'item':o}
             if method=='PATCH':
+                bundled = cart.apply_order_action(DB, uid, ident, data)
+                if bundled is not None:
+                    return bundled
                 status=data.get('status')
                 if o['shipping_state'] in ('creating','reconciliation_required'):
                     raise MarketError('Статус накладної уточнюється. Перевірте кабінет Нової пошти перед зміною замовлення.',409)
@@ -280,7 +290,7 @@ def _dispatch(uid, path, data, method):
                 if status in ('cancelled','completed'):
                     DB.execute("update market_listings set status=? where id=? and status='reserved'",('active' if status=='cancelled' else 'sold',o['listing_id']))
                 return {'item':order(ident,uid)}
-        if method=='GET':return {'items':[order(r['id'],uid) for r in q('select id from market_orders where buyer_id=? or seller_id=? order by id desc limit 100',(uid,uid))]}
+        if method=='GET':return {'items':[order(r['id'],uid) for r in q('select id from market_orders where (buyer_id=? or seller_id=?) and price>0 order by id desc limit 100',(uid,uid))]}
         if method=='POST':
             key=text(data.get('request_id'),8,100)
             lid=integer(data.get('listing_id'))
@@ -345,6 +355,10 @@ async def dispatch(uid, path, data=None, method='GET'):
         except Exception:
             DB.rollback()
             raise
+    if method == 'PATCH' and re.fullmatch(r'/orders/\d+', path) and data.get('status') == 'accepted':
+        item = result.get('item', {})
+        if item.get('seller_id') == uid and item.get('carrier') == 'nova':
+            result = await attempt_delivery(uid, item['id'], data.get('parcel'))
     # Notify only after committing; Telegram delivery must never roll back a sale.
     tell=getattr(B,'tell',None)
     if tell:
@@ -443,118 +457,108 @@ async def photo_response(request,uid):
     return web.Response(body=data,content_type='image/jpeg',headers={'Cache-Control':'private, max-age=300','X-Content-Type-Options':'nosniff'})
 
 
-async def delivery(uid,path,data=None,method='GET'):
-    """Delivery API shared by bot and Mini App. Seller secrets never leave server."""
+async def attempt_delivery(uid, oid, parcel=None):
+    """Single persisted attempt shared by bot, Mini App, and bundled orders."""
     import shipping
-    data=data or {}
-    if not isinstance(data,dict):raise MarketError('Некоректний запит.')
+    async with LOCK:
+        o = order(integer(oid), uid)
+        if o['seller_id'] != uid:
+            raise MarketError('Лише продавець підтверджує відправлення.', 403)
+        scope = cart.bundle_scope(DB, o['id'])
+        if scope and scope['primary_order_id'] != o['id']:
+            raise MarketError('Оберіть основне замовлення комплекту.', 409)
+        ids = scope['order_ids'] if scope else [o['id']]
+        if o['ttn']:
+            return {'item': o}
+        if o['shipping_state'] in ('creating', 'reconciliation_required'):
+            raise MarketError('Перевірте попередню спробу у перевізника. Повторне створення заблоковано.', 409)
+        if o['status'] != 'accepted' or o['carrier'] != 'nova':
+            raise MarketError('Потрібне підтверджене замовлення Новою поштою.', 409)
+        row = one('select body from market_sender_profiles where seller_id=?', (uid,))
+        sender = json.loads(row['body']) if row else None
+        # Parcel dimensions must describe the actual packed bundle, not one item.
+        o['parcel'] = parcel if isinstance(parcel, dict) and parcel else ({} if scope else o.get('parcel', {}))
+        marks = ','.join('?' for _ in ids)
+        DB.execute('update market_orders set shipping_state=?,shipping_error=? where id in ('+marks+')', ('creating','',*ids))
+        DB.commit()
     try:
+        result = await delivery_service.auto_create(uid, o, sender)
+    except BaseException as e:
+        uncertain = not isinstance(e, shipping.ShippingError) or e.uncertain
+        state = 'reconciliation_required' if uncertain else 'awaiting_delivery_details'
         async with LOCK:
-            if not one('select 1 from users where id=? and banned=0',(uid,)):
-                raise MarketError('Обліковий запис недоступний.',403)
-            stored=one('select credentials from market_delivery where seller_id=?',(uid,))
-        if path=='/delivery/settings':
-            if method=='GET':
-                cfg=shipping.decrypt_credentials(uid,stored['credentials']) if stored else {}
-                return {'item':{'connected':bool(cfg),'sender':cfg.get('sender',{}),'carrier':'nova'}}
-            if method=='DELETE':
+            DB.execute('update market_orders set shipping_state=?,shipping_error=? where id in ('+marks+')',
+                       (state, getattr(e, 'code', 'shipping_uncertain'), *ids)); DB.commit()
+        if isinstance(e, shipping.ShippingError):
+            return {'item': order(o['id'],uid), 'delivery': {'state':state,'message':str(e)}}
+        raise
+    async with LOCK:
+        DB.execute('update market_orders set shipping_state=?,shipping_error=?,ttn=? where id in ('+marks+')',
+                   (result['state'],result.get('code',''),result.get('ttn',''),*ids)); DB.commit()
+        return {'item':order(o['id'],uid),'delivery':result}
+
+
+async def delivery(uid, path, data=None, method='GET'):
+    import shipping
+    data = data or {}
+    if not isinstance(data, dict):
+        raise MarketError('Некоректний запит.')
+    async with LOCK:
+        if not one('select 1 from users where id=? and banned=0',(uid,)):
+            raise MarketError('Обліковий запис недоступний.',403)
+    try:
+        if path == '/delivery/settings':
+            if method == 'GET':
                 async with LOCK:
-                    DB.execute('delete from market_delivery where seller_id=?',(uid,));DB.commit()
-                return {'ok':True}
-            if method=='POST':
-                previous=shipping.decrypt_credentials(uid,stored['credentials']) if stored else {}
-                key=text(data.get('api_key') or previous.get('api_key'),16,200)
-                sender=data.get('sender')
-                if not isinstance(sender,dict):raise MarketError('Заповніть дані відправника.')
-                cleaned={k:text(sender.get(k),1,100) for k in ('city_ref','sender_ref','warehouse_ref','contact_ref','phone')}
-                if not re.fullmatch(r'\+?380\d{9}',cleaned['phone']):raise MarketError('Перевірте телефон відправника.')
-                encrypted=shipping.encrypt_credentials(uid,{'api_key':key,'sender':cleaned})
-                # Validate credentials against carrier before saving.
-                client=shipping.NovaPoshta(key)
-                senders=await client.senders()
-                if not any(x.get('Ref')==cleaned['sender_ref'] for x in senders):raise MarketError('Відправник не належить цьому акаунту Нової пошти.')
-                contacts=await client.contacts(cleaned['sender_ref'])
-                if not any(x.get('Ref')==cleaned['contact_ref'] for x in contacts):raise MarketError('Оберіть контакт відправника зі свого акаунту.')
-                warehouses=await client.warehouses(cleaned['city_ref'],'')
-                if not any(x.get('ref')==cleaned['warehouse_ref'] for x in warehouses):raise MarketError('Відділення не належить вибраному місту.')
+                    row = one('select body from market_sender_profiles where seller_id=?',(uid,))
+                return {'item':{'sender':json.loads(row['body']) if row else {},'connected':bool(row),'mode':delivery_service.delivery_mode()}}
+            if method == 'DELETE':
                 async with LOCK:
-                    DB.execute('insert into market_delivery values(?,?) on conflict(seller_id) do update set credentials=excluded.credentials',(uid,encrypted));DB.commit()
+                    DB.execute('delete from market_sender_profiles where seller_id=?',(uid,)); DB.commit()
                 return {'ok':True}
-        # Buyer directory lookup uses the app's optional server-side directory key,
-        # or the chosen seller's encrypted key; never send it to the browser.
-        directory_paths=('/delivery/cities','/delivery/warehouses')
-        if path in directory_paths and method in ('GET','POST'):
-            import os
-            key=text(data.get('api_key'),16,200) if method=='POST' and data.get('api_key') else os.environ.get('NOVA_POSHTA_API_KEY','')
-            if not key:
-                owner=integer(data.get('seller_id',uid))
-                async with LOCK:stored=one('select credentials from market_delivery where seller_id=?',(owner,))
-                if not stored:raise MarketError('Довідник не підключено. Вкажіть місто та відділення вручну.',503)
-                key=shipping.decrypt_credentials(owner,stored['credentials'])['api_key']
-            client=shipping.NovaPoshta(key)
-            items=await client.cities(text(data.get('q',''),0,80)) if path.endswith('/cities') else await client.warehouses(text(data.get('city_ref'),1,80),text(data.get('q',''),0,80))
-            return {'items':items}
-        if path in ('/delivery/senders','/delivery/contacts','/delivery/addresses') and method=='POST':
-            # Setup wizard can validate an unsaved key, sent exclusively in body.
-            cfg=shipping.decrypt_credentials(uid,stored['credentials']) if stored else {}
-            key=text(data.get('api_key') or cfg.get('api_key'),16,200)
-            client=shipping.NovaPoshta(key)
-            if path.endswith('/senders'):items=await client.senders()
-            elif path.endswith('/contacts'):items=await client.contacts(text(data.get('sender_ref'),1,80))
-            else:items=await client.addresses(text(data.get('sender_ref'),1,80))
-            return {'items':items}
-        if path=='/delivery/reconcile' and method=='POST':
-            oid=integer(data.get('order_id'))
-            ttn=text(data.get('ttn'),14,14)
+            if method == 'POST':
+                if data.get('api_key') or data.get('token'):
+                    raise MarketError('Продавцю не потрібно вводити API-ключ.')
+                profile = delivery_service.normalize_sender_profile(data.get('sender',data))
+                if delivery_service.delivery_mode() != 'central_not_configured':
+                    await delivery_service.validate_sender_directory(profile)
+                async with LOCK:
+                    DB.execute('insert into market_sender_profiles values(?,?) on conflict(seller_id) do update set body=excluded.body',
+                               (uid,json.dumps(profile,ensure_ascii=False))); DB.commit()
+                return {'ok':True,'mode':delivery_service.delivery_mode()}
+        if path in ('/delivery/cities','/delivery/warehouses') and method in ('GET','POST'):
+            if data.get('api_key'):
+                raise MarketError('Ключ перевізника налаштовує лише оператор сервісу.')
+            client = delivery_service.central_client()
+            rows = await client.cities(text(data.get('q',''),0,80)) if path.endswith('/cities') else await client.warehouses(text(data.get('city_ref'),1,80),text(data.get('q',''),0,80))
+            return {'items':rows}
+        if path == '/delivery/waybill' and method == 'POST':
+            return await attempt_delivery(uid,integer(data.get('order_id')),data.get('parcel'))
+        if path == '/delivery/track' and method == 'GET':
+            async with LOCK:
+                o = order(integer(data.get('order_id')),uid)
+            if not o['ttn'] or o['carrier'] != 'nova':
+                raise MarketError('Накладну Нової пошти ще не додано.',409)
+            return {'item':await delivery_service.central_client().track(o['ttn'],o['recipient']['phone'])}
+        if path == '/delivery/reconcile' and method == 'POST':
+            ttn = text(data.get('ttn'),14,14)
             if not re.fullmatch(r'\d{14}',ttn) or data.get('confirmed_in_carrier_account') is not True:
-                raise MarketError('Перевірте накладну у своєму кабінеті Нової пошти та підтвердьте її номер.')
+                raise MarketError('Перевірте накладну у перевізника та підтвердьте її номер.')
             async with LOCK:
-                o=order(oid,uid)
-                if o['seller_id']!=uid or o['carrier']!='nova' or o['shipping_state'] not in ('creating','reconciliation_required'):
+                o = order(integer(data.get('order_id')),uid)
+                if o['seller_id'] != uid or o['carrier'] != 'nova' or o['shipping_state'] not in ('creating','reconciliation_required'):
                     raise MarketError('Уточнення накладної недоступне.',409)
-                if not stored:raise MarketError('Підключіть акаунт Нової пошти.',409)
-                cfg=shipping.decrypt_credentials(uid,stored['credentials'])
-            tracking=await shipping.NovaPoshta(cfg['api_key']).track(ttn,o['recipient']['phone'])
+                scope = cart.bundle_scope(DB,o['id'])
+                if scope and scope['primary_order_id'] != o['id']:
+                    raise MarketError('Оберіть основне замовлення комплекту.',409)
+                ids = scope['order_ids'] if scope else [o['id']]
+            tracking = await delivery_service.central_client().track(ttn,o['recipient']['phone'])
             if str(tracking.get('status_code')) in ('','2','3'):
-                raise MarketError('Перевізник не підтвердив чинну накладну. Перевірте її номер.',409)
+                raise MarketError('Перевізник не підтвердив чинну накладну.',409)
             async with LOCK:
-                DB.execute("update market_orders set ttn=?,shipping_state='created',shipping_error='' where id=?",(ttn,oid));DB.commit()
-                return {'item':order(oid,uid),'tracking':tracking}
-        if path=='/delivery/waybill' and method=='POST':
-            oid=integer(data.get('order_id'))
-            async with LOCK:
-                o=order(oid,uid)
-                if o['seller_id']!=uid or o['carrier']!='nova' or o['status'] not in ('accepted','shipped'):
-                    raise MarketError('Накладну створює продавець після підтвердження замовлення.',403)
-                if o['ttn']:return {'item':o}
-                if o['shipping_state'] in ('creating','reconciliation_required'):
-                    raise MarketError('Попередній запит потребує перевірки в кабінеті Нової пошти. Повторне створення заблоковано.',409)
-                if not stored:raise MarketError('Підключіть свій акаунт Нової пошти в налаштуваннях.',409)
-                cfg=shipping.decrypt_credentials(uid,stored['credentials'])
-                if not o['recipient'].get('city_ref') or not o['recipient'].get('warehouse_ref'):
-                    raise MarketError('Покупець має обрати місто і відділення з довідника. Або створіть ТТН у кабінеті перевізника та внесіть номер вручну.',409)
-                parcel=data.get('parcel')
-                if not isinstance(parcel,dict):raise MarketError('Вкажіть вагу і розміри посилки.')
-                parcel={k:float(parcel.get(k,0)) for k in ('weight','length','width','height')}
-                if not all(0<v<=1000 for v in parcel.values()):raise MarketError('Вкажіть коректну вагу та розміри.')
-                parcel.update(price=o['price'],title=o['title'])
-                DB.execute("update market_orders set shipping_state='creating',shipping_error='' where id=?",(oid,));DB.commit()
-            try:
-                result=await shipping.NovaPoshta(cfg['api_key']).create_waybill(cfg['sender'],o['recipient'],parcel,oid)
-            except BaseException as e:
-                uncertain=not isinstance(e,shipping.ShippingError) or e.uncertain
-                async with LOCK:
-                    DB.execute('update market_orders set shipping_state=?,shipping_error=? where id=?',('reconciliation_required' if uncertain else 'failed',getattr(e,'code','unexpected'),oid));DB.commit()
-                raise
-            async with LOCK:
-                DB.execute("update market_orders set shipping_state='created',ttn=? where id=?",(result['ttn'],oid));DB.commit()
-                return {'item':order(oid,uid),'delivery':result}
-        if path=='/delivery/track' and method=='GET':
-            async with LOCK:o=order(integer(data.get('order_id')),uid);seller=one('select credentials from market_delivery where seller_id=?',(o['seller_id'],))
-            if not o['ttn']:raise MarketError('Накладну ще не додано.',409)
-            if o['carrier']!='nova' or not seller:raise MarketError('Перевірте статус у кабінеті перевізника.',409)
-            cfg=shipping.decrypt_credentials(o['seller_id'],seller['credentials'])
-            return {'item':await shipping.NovaPoshta(cfg['api_key']).track(o['ttn'],o['recipient']['phone'])}
+                marks = ','.join('?' for _ in ids)
+                DB.execute('update market_orders set ttn=?,shipping_state=?,shipping_error=? where id in ('+marks+')',(ttn,'created','',*ids)); DB.commit()
+                return {'item':order(o['id'],uid),'tracking':tracking}
         raise MarketError('Невідомий маршрут доставки.',404)
     except shipping.ShippingError as e:
         raise MarketError(str(e),503 if e.uncertain else 400)

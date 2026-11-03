@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import sqlite3
 import sys
 import tempfile
@@ -13,6 +14,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'bot'))
 import db
 import market
 import shipping
+import delivery_service
 
 
 class MarketplaceTests(unittest.IsolatedAsyncioTestCase):
@@ -90,35 +92,67 @@ class MarketplaceTests(unittest.IsolatedAsyncioTestCase):
         await db.ex('update users set banned=1 where id=?',(self.buyer,))
         with self.assertRaises(market.MarketError):await market.dispatch(self.buyer,'/orders',self.purchase(),'POST')
 
+    def normal_sender_profile(self):
+        return {'name':'Петренко Олена','phone':'380501234567',
+                'city_ref':'11111111-1111-1111-1111-111111111111',
+                'warehouse_ref':'22222222-2222-2222-2222-222222222222'}
+
+    def save_sender_profile(self):
+        market.DB.execute('insert into market_sender_profiles values(?,?)',
+                          (self.seller,json.dumps(self.normal_sender_profile())))
+        market.DB.commit()
+
     async def test_shipping_document_is_not_dispatch(self):
         o=await self.buy();p=f"/orders/{o['id']}"
-        await market.dispatch(self.seller,p,{'status':'accepted'},'PATCH')
-        market.DB.execute('insert into market_delivery values(?,?)',(self.seller,'encrypted'));market.DB.commit()
-        fake=SimpleNamespace(create_waybill=AsyncMock(return_value={'ttn':'12345678901234','document_ref':'ref'}))
-        with patch.object(shipping,'decrypt_credentials',return_value={'api_key':'key','sender':{}}),patch.object(shipping,'NovaPoshta',return_value=fake):
-            result=await market.delivery(self.seller,'/delivery/waybill',{'order_id':o['id'],'parcel':{'weight':1,'length':10,'width':10,'height':10}},'POST')
+        self.save_sender_profile()
+        fake=AsyncMock(return_value={'state':'created','code':'created','message':'Накладну створено.',
+                                    'ttn':'12345678901234','document_ref':'ref'})
+        with patch.object(delivery_service,'auto_create',fake):
+            result=await market.dispatch(self.seller,p,{'status':'accepted','parcel':{'weight':1,'length':10,'width':10,'height':10}},'PATCH')
             self.assertEqual(result['item']['status'],'accepted')
             self.assertEqual(result['item']['shipping_state'],'created')
+            self.assertEqual(result['item']['ttn'],'12345678901234')
+            self.assertEqual(fake.await_args.args[2],self.normal_sender_profile())
             await market.delivery(self.seller,'/delivery/waybill',{'order_id':o['id'],'parcel':{}},'POST')
-            fake.create_waybill.assert_awaited_once()
+            fake.assert_awaited_once()
 
     async def test_uncertain_shipping_blocks_retries_and_cancellation(self):
         o=await self.buy();p=f"/orders/{o['id']}"
-        await market.dispatch(self.seller,p,{'status':'accepted'},'PATCH')
-        market.DB.execute('insert into market_delivery values(?,?)',(self.seller,'encrypted'));market.DB.commit()
-        fake=SimpleNamespace(create_waybill=AsyncMock(side_effect=shipping.ShippingError('timeout','Unknown outcome',True)))
-        with patch.object(shipping,'decrypt_credentials',return_value={'api_key':'key','sender':{}}),patch.object(shipping,'NovaPoshta',return_value=fake):
-            with self.assertRaises(market.MarketError):await market.delivery(self.seller,'/delivery/waybill',{'order_id':o['id'],'parcel':{'weight':1,'length':10,'width':10,'height':10}},'POST')
-            with self.assertRaises(market.MarketError):await market.delivery(self.seller,'/delivery/waybill',{'order_id':o['id'],'parcel':{}},'POST')
-        with self.assertRaises(market.MarketError):await market.dispatch(self.buyer,p,{'status':'cancelled'},'PATCH')
+        self.save_sender_profile()
+        fake=AsyncMock(return_value={'state':'reconciliation_required','code':'shipping_uncertain','message':'Перевірте кабінет перевізника.'})
+        with patch.object(delivery_service,'auto_create',fake):
+            result=await market.dispatch(self.seller,p,{'status':'accepted'},'PATCH')
+            self.assertEqual(result['item']['shipping_state'],'reconciliation_required')
+            with self.assertRaises(market.MarketError):
+                await market.delivery(self.seller,'/delivery/waybill',{'order_id':o['id'],'parcel':{}},'POST')
+            fake.assert_awaited_once()
+        with self.assertRaises(market.MarketError):
+            await market.dispatch(self.buyer,p,{'status':'cancelled'},'PATCH')
         self.assertEqual((await market.dispatch(self.buyer,p))['item']['shipping_state'],'reconciliation_required')
 
-    async def test_sender_must_belong_to_connected_account(self):
-        fake=SimpleNamespace(senders=AsyncMock(return_value=[{'Ref':'owned-sender'}]))
-        payload={'api_key':'a'*32,'sender':{'city_ref':'city','sender_ref':'someone-else','warehouse_ref':'warehouse','contact_ref':'contact','phone':'+380501234567'}}
-        with patch.object(shipping,'encrypt_credentials',return_value='encrypted'),patch.object(shipping,'NovaPoshta',return_value=fake):
-            with self.assertRaises(market.MarketError):await market.delivery(self.seller,'/delivery/settings',payload,'POST')
-        self.assertIsNone(market.one('select * from market_delivery where seller_id=?',(self.seller,)))
+    async def test_sender_settings_reject_api_credentials(self):
+        payload={'api_key':'a'*32,'sender':self.normal_sender_profile()}
+        with self.assertRaises(market.MarketError):
+            await market.delivery(self.seller,'/delivery/settings',payload,'POST')
+        self.assertIsNone(market.one('select * from market_sender_profiles where seller_id=?',(self.seller,)))
+
+    async def test_normal_sender_settings_without_personal_api_key(self):
+        payload={'sender':self.normal_sender_profile()}
+        with patch.dict(os.environ,{'NOVA_POSHTA_API_KEY':''}):
+            await market.delivery(self.seller,'/delivery/settings',payload,'POST')
+            result=await market.delivery(self.seller,'/delivery/settings',method='GET')
+        self.assertEqual(result['item']['sender'],self.normal_sender_profile())
+        self.assertEqual(result['item']['mode'],'central_not_configured')
+        self.assertNotIn('api_key',json.dumps(result))
+
+    async def test_automatic_accept_without_central_configuration_stays_pending(self):
+        o=await self.buy();p=f"/orders/{o['id']}"
+        self.save_sender_profile()
+        with patch.dict(os.environ,{'NOVA_POSHTA_API_KEY':'','NOVA_POSHTA_MARKETPLACE_ENABLED':''}):
+            result=await market.dispatch(self.seller,p,{'status':'accepted'},'PATCH')
+        self.assertEqual(result['item']['status'],'accepted')
+        self.assertEqual(result['item']['shipping_state'],'awaiting_carrier_setup')
+        self.assertEqual(result['item']['ttn'],'')
 
 
 if __name__=='__main__':unittest.main()

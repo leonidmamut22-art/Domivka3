@@ -132,6 +132,16 @@ class NovaPoshta:
                  "status": r.get("WarehouseStatus", ""), "category": r.get("CategoryOfWarehouse", ""),
                  "max_weight": r.get("TotalMaxWeightAllowed", "")} for r in rows]
 
+    async def warehouse_by_ref(self, city_ref: str, warehouse_ref: str):
+        rows = await self._call("Address", "getWarehouses", {"CityRef": ref(city_ref),
+                     "Ref": ref(warehouse_ref), "Language": "UA", "Limit": 100})
+        row = next((r for r in rows if r.get("Ref") == warehouse_ref), None)
+        if not row:
+            return None
+        return {"ref": row.get("Ref", ""), "name": row.get("Description", ""),
+                "city_ref": row.get("CityRef", ""), "status": row.get("WarehouseStatus", ""),
+                "category": row.get("CategoryOfWarehouse", "")}
+
     async def senders(self):
         return await self._call("Counterparty", "getCounterparties", {"CounterpartyProperty": "Sender", "Page": "1"})
 

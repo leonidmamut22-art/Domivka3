@@ -25,6 +25,10 @@ import db
 import feat
 import growth
 import market
+import business
+import billing
+import cart
+from version import VERSION
 import listing_import
 
 B = None
@@ -297,6 +301,33 @@ def make_app(mod) -> web.Application:
         return await market.handle(r, u["id"])
 
     @handler
+    async def business_api(r):
+        u = await need(r)
+        try:
+            data = dict(r.query) if r.method == "GET" else await r.json()
+            path = r.path.removeprefix("/api/business") or "/"
+            if path == "/billing/invoice" and r.method == "POST":
+                return web.json_response(await billing.invoice(u["id"], data.get("offer_id")))
+            if path == "/admin/refund-stars" and r.method == "POST":
+                return web.json_response(await billing.refund(u["id"], data.get("invoice_id")))
+            return web.json_response(await business.dispatch(u["id"], path, data, r.method))
+        except (business.BusinessError, billing.BillingError) as e:
+            return fail(e.message, "business", e.status)
+        except (ValueError, TypeError):
+            return fail("Некоректний запит.", "business")
+
+    @handler
+    async def cart_api(r):
+        u = await need(r)
+        try:
+            data = dict(r.query) if r.method == "GET" else await r.json()
+            return web.json_response(await cart.dispatch(u["id"], r.path.removeprefix("/api/cart") or "/", data, r.method))
+        except market.MarketError as e:
+            return fail(e.message, "cart", e.status)
+        except (ValueError, TypeError):
+            return fail("Некоректний запит.", "cart")
+
+    @handler
     async def market_import(r):
         u = await need(r)
         q = IMPORTS[u["id"]]
@@ -435,7 +466,8 @@ def make_app(mod) -> web.Application:
         tu, u = await auth(r)
         uid = u["id"] if u else 0
         lid = int(r.match_info["id"])
-        l = await db.one(f"{RATED} where l.id=? and ((l.active=1 and l.blocked=0) or l.owner=?)", (lid, uid))
+        can_review = bool(u and not u.get("banned") and (uid in B.ADMINS or business.role(uid) in ("owner","admin","moderator")))
+        l = await db.one(f"{RATED} where l.id=? and ((l.active=1 and l.blocked=0) or l.owner=? or ?=1)", (lid, uid, int(can_review)))
         if not l:
             return web.json_response({}, status=404)
         if l["owner"] != uid:
@@ -452,9 +484,12 @@ def make_app(mod) -> web.Application:
 
     async def photo(r):
         lid, i = int(r.match_info["id"]), int(r.match_info["i"])
-        l = await db.one(f"select photos from listings where id=? and {B.VIS}", (lid,))
+        _, viewer = await auth(r)
+        uid = viewer["id"] if viewer and not viewer.get("banned") else 0
+        can_review = bool(uid and (uid in B.ADMINS or business.role(uid) in ("owner","admin","moderator")))
+        l = await db.one("select photos,active,blocked,owner from listings where id=? and ((active=1 and blocked=0) or owner=? or ?=1)", (lid, uid, int(can_review)))
         ph = json.loads(l["photos"]) if l else []
-        if i >= len(ph):
+        if i < 0 or i >= len(ph):
             return web.Response(status=404)
         if ph[i] not in CACHE:
             buf = io.BytesIO()
@@ -462,7 +497,7 @@ def make_app(mod) -> web.Application:
             if len(CACHE) > 150:
                 CACHE.pop(next(iter(CACHE)))
             CACHE[ph[i]] = buf.getvalue()
-        return web.Response(body=CACHE[ph[i]], content_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+        return web.Response(body=CACHE[ph[i]], content_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400" if l["active"] and not l["blocked"] else "private, no-store"})
 
     @handler
     async def fav(r):
@@ -909,7 +944,10 @@ def make_app(mod) -> web.Application:
         return web.json_response({"link": link, "stars": amount})
 
     app = web.Application(client_max_size=60 * 1024 * 1024, middlewares=[no_cache])
-    app.add_routes([web.get("/assets/{name}", asset), web.post("/api/market/import", market_import),
+    app.add_routes([web.get("/api/version", lambda r: web.json_response({"version": VERSION})),
+                    web.route("*", "/api/business/{tail:.*}", business_api),
+                    web.route("*", "/api/cart", cart_api), web.route("*", "/api/cart/{tail:.*}", cart_api),
+                    web.get("/assets/{name}", asset), web.post("/api/market/import", market_import),
                     web.route("*", "/api/market/{tail:.*}", market_api)])
     app.add_routes([web.get("/", index), web.get("/api/ping", ping), web.get("/api/club", club), web.post("/api/club/redeem", club_redeem), web.get("/api/trip/{id}/stay", trip_stay), web.get("/api/wishlist/{id}", wishlist), web.get("/api/meta", meta), web.get("/api/chats", chats), web.post("/api/chat/start", chat_start), web.get("/api/chat/{id}", chat_get), web.post("/api/chat/{id}", chat_send), web.post("/api/alert", alert), web.get("/api/me", me), web.post("/api/register", register), web.get("/api/listings", listings),
                     web.get("/api/listing/{id}", detail), web.get("/p/{id}/{i}", photo), web.post("/api/fav", fav), web.post("/api/ai", ai), web.post("/api/book", book),

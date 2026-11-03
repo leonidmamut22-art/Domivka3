@@ -21,4 +21,19 @@ jobs:
       - run: python -m pip install -r bot/requirements.txt
       - run: python -m compileall -q bot
       - run: python -m unittest discover -s tests -v
-      - run: node --check webapp/market.js
+      - run: node tests/check_frontend.mjs
+      - name: Install disposable browser test tools
+        run: |
+          npm install --no-save --package-lock=false playwright
+          npx playwright install --with-deps chromium
+      - name: Browser smoke
+        run: |
+          python tests/browser_fixture.py > fixture.log 2>&1 &
+          node tests/browser_smoke.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: domivka-browser-check
+          path: |
+            Domivka_3/Domivka/test-results/
+            Domivka_3/Domivka/fixture.log

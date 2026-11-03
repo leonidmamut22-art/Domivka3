@@ -26,6 +26,10 @@ import tunnel
 import webapp
 import market
 import market_bot
+import business
+import billing
+import cart
+from version import VERSION
 
 ROOT = Path(__file__).resolve().parent.parent
 ENV = ROOT / ".env"
@@ -163,7 +167,7 @@ async def is_super(host: int) -> bool:
 def menu_rows(u: dict):
     host = u["role"] == "host"
     r = [[("📱 Відкрити Домівку", "webapp:" + WEBAPP_URL)]] if WEBAPP_URL else []
-    return r + [[("🔍 Пошук", "m:s"), ("📅 Бронювання", "m:t")], [("❤️ Обране", "m:f"), ("💬 Чати", "m:c")],
+    return r + [[("Маркет / сервіси", "mk:services")], [("🔍 Пошук", "m:s"), ("📅 Бронювання", "m:t")], [("❤️ Обране", "m:f"), ("💬 Чати", "m:c")],
                 [("🏠 Кабінет господаря" if host else "🏠 Здавати житло", "m:host" if host else "m:h"), ("⋯ Ще", "m:more")]]
 
 
@@ -1092,6 +1096,12 @@ async def register(c: CallbackQuery, role: str):
 async def on_message(m: Message):
     if m.chat.type != "private" or not m.from_user:
         return
+    if await billing.successful(m):
+        return
+    if (m.text or "").split("@", 1)[0].strip() == "/paysupport":
+        return await m.answer(billing.support_text())
+    if (m.text or "").split("@", 1)[0].strip() == "/version":
+        return await m.answer(f"Domivka {VERSION} · два маркети · /start")
     if await market_bot.on_message(m):
         return
     uid, chat, text = m.from_user.id, m.chat.id, (m.text or "").strip()
@@ -1232,6 +1242,8 @@ async def help_(chat: int):
 
 @dp.pre_checkout_query()
 async def on_pre(q: PreCheckoutQuery):
+    if await billing.pre_checkout(q):
+        return
     ok = False
     if q.invoice_payload.startswith("bk:"):
         b = await db.one("select * from bookings where id=?", (int(q.invoice_payload[3:]),))
@@ -1671,6 +1683,9 @@ async def main():
     DATA.mkdir(exist_ok=True)
     await db.init(str(DATA / "domivka.db"))
     await market.setup(sys.modules[__name__])
+    await cart.setup(sys.modules[__name__])
+    await business.setup(sys.modules[__name__])
+    await billing.setup(sys.modules[__name__])
     market_bot.setup(sys.modules[__name__])
     bot = Bot(os.environ["BOT_TOKEN"], default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     try:
@@ -1680,6 +1695,14 @@ async def main():
     BOT_USERNAME = me.username or ""
     feat.setup(sys.modules[__name__])
     await bot.set_my_commands([
+        BotCommand(command="start", description="Домівка — оберіть свій маркет"),
+        BotCommand(command="account", description="Мій кабінет"),
+        BotCommand(command="club", description="Мій клуб, рівень та бонуси"),
+        BotCommand(command="cart", description="Кошик у продавців"),
+        BotCommand(command="friends", description="Запросити друзів"),
+        BotCommand(command="admin", description="Керування сервісом"),
+        BotCommand(command="paysupport", description="Допомога з оплатою Stars"),
+        BotCommand(command="version", description="Версія запущеного сервісу"),
         BotCommand(command="services", description="Нерухомість або маркет"),
         BotCommand(command="market", description="Знайти товари"),
         BotCommand(command="sell", description="Продати річ"),
@@ -1705,6 +1728,7 @@ async def main():
     asyncio.create_task(background())
     logging.info("Бот @%s запущено. Адміністраторів: %d. Режим оплати: %s. Не закривайте це вікно.", BOT_USERNAME, len(ADMINS), PAYMODE)
     await bot.delete_webhook(drop_pending_updates=False)
+    logging.info("Domivka %s — marketplace, business and cart enabled", VERSION)
     await dp.start_polling(bot)
 
 
