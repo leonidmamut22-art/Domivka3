@@ -7,6 +7,7 @@ import html as htmllib
 import io
 import ipaddress
 import json
+import os
 import logging
 import re
 import socket
@@ -351,6 +352,9 @@ def make_app(mod) -> web.Application:
         if not path.is_file():
             raise web.HTTPNotFound()
         return web.FileResponse(path, headers={"Cache-Control": "no-cache"})
+
+    async def identity(r):
+        return web.json_response({"service": "domivka", "version": VERSION, "bot_id": B.bot.id, "bot_username": B.BOT_USERNAME}, headers={"Cache-Control": "no-store"})
 
     async def ping(r):
         return web.json_response({"ok": True, "listings": (await db.one(f"select count(*) n from listings where {B.VIS}"))["n"]})
@@ -949,7 +953,7 @@ def make_app(mod) -> web.Application:
                     web.route("*", "/api/cart", cart_api), web.route("*", "/api/cart/{tail:.*}", cart_api),
                     web.get("/assets/{name}", asset), web.post("/api/market/import", market_import),
                     web.route("*", "/api/market/{tail:.*}", market_api)])
-    app.add_routes([web.get("/", index), web.get("/api/ping", ping), web.get("/api/club", club), web.post("/api/club/redeem", club_redeem), web.get("/api/trip/{id}/stay", trip_stay), web.get("/api/wishlist/{id}", wishlist), web.get("/api/meta", meta), web.get("/api/chats", chats), web.post("/api/chat/start", chat_start), web.get("/api/chat/{id}", chat_get), web.post("/api/chat/{id}", chat_send), web.post("/api/alert", alert), web.get("/api/me", me), web.post("/api/register", register), web.get("/api/listings", listings),
+    app.add_routes([web.get("/", index), web.get("/api/ping", ping), web.get("/api/identity", identity), web.get("/api/club", club), web.post("/api/club/redeem", club_redeem), web.get("/api/trip/{id}/stay", trip_stay), web.get("/api/wishlist/{id}", wishlist), web.get("/api/meta", meta), web.get("/api/chats", chats), web.post("/api/chat/start", chat_start), web.get("/api/chat/{id}", chat_get), web.post("/api/chat/{id}", chat_send), web.post("/api/alert", alert), web.get("/api/me", me), web.post("/api/register", register), web.get("/api/listings", listings),
                     web.get("/api/listing/{id}", detail), web.get("/p/{id}/{i}", photo), web.post("/api/fav", fav), web.post("/api/ai", ai), web.post("/api/book", book),
                     web.get("/api/trips", trips), web.post("/api/trip/{id}/cancel", trip_cancel), web.post("/api/trip/{id}/paid", trip_paid), web.post("/api/review", review),
                     web.get("/api/host", host), web.post("/api/host/decide", host_decide), web.post("/api/host/cancel", host_cancel), web.post("/api/host/listing/{id}", host_edit),
@@ -959,15 +963,12 @@ def make_app(mod) -> web.Application:
 
 
 async def start(mod, port: int) -> int:
-    """Запускає вебсервер. Якщо порт зайнятий, пробує наступні (до +9). Повертає реальний порт."""
+    """Bind only the requested port: a conflict must never route to another bot."""
     runner = web.AppRunner(make_app(mod), access_log=None)
     await runner.setup()
-    last = None
-    for p in range(port, port + 10):
-        try:
-            await web.TCPSite(runner, "127.0.0.1", p).start()
-            return p
-        except OSError as e:
-            last = e
-    raise last
-
+    try:
+        await web.TCPSite(runner, os.environ.get('WEBAPP_HOST','127.0.0.1'), port).start()
+    except BaseException:
+        await runner.cleanup()
+        raise
+    return port

@@ -285,7 +285,7 @@ async def on_message(m):
     uid = m.from_user.id
     text = (m.text or '').strip()
     command = text.split()[0].split('@')[0][1:] if text.startswith('/') else ''
-    argument = text.partition(' ')[2].strip()
+    argument = text.partition(' ')[2].strip() if text.startswith('/') else ''
     if command == 'start' and argument and not is_market_start(argument):
         STATE.pop(uid, None)
         return False
@@ -315,7 +315,7 @@ async def on_message(m):
             elif command == 'admin':
                 await admin_home(uid)
             elif command == 'market':
-                await home(uid, text.partition(' ')[2].strip())
+                await home(uid, argument)
             elif command == 'rent':
                 await B.home(uid, await db.one('select * from users where id=?', (uid,)))
             elif command == 'sell':

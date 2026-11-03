@@ -137,14 +137,15 @@ class CartTests(unittest.IsolatedAsyncioTestCase):
         result = await self.checkout()
         oid = result['item']['id']
         await market.dispatch(1, f'/orders/{oid}', {'status': 'accepted'}, 'PATCH')
-        market.DB.execute('insert into market_delivery values(?,?)', (1, 'encrypted'))
-        market.DB.commit()
-        fake = SimpleNamespace(create_waybill=AsyncMock(return_value={'ttn': '12345678901234', 'document_ref': 'ref'}))
-        with patch.object(shipping, 'decrypt_credentials', return_value={'api_key': 'key', 'sender': {}}), patch.object(shipping, 'NovaPoshta', return_value=fake):
-            await market.delivery(1, '/delivery/waybill', {'order_id': oid, 'parcel': {'weight': 1, 'length': 10, 'width': 10, 'height': 10}}, 'POST')
-            await market.delivery(1, '/delivery/waybill', {'order_id': oid, 'parcel': {}}, 'POST')
-        fake.create_waybill.assert_awaited_once()
-        self.assertEqual(fake.create_waybill.await_args.args[2]['price'], 3000)
+        parcel = {'weight': 2, 'length': 30, 'width': 20, 'height': 10}
+        fake = AsyncMock(return_value={'state':'created','code':'created','ttn':'12345678901234'})
+        import delivery_service
+        with patch.object(delivery_service, 'auto_create', fake):
+            await market.delivery(1, '/delivery/waybill', {'order_id': oid, 'parcel': parcel}, 'POST')
+            await market.delivery(1, '/delivery/waybill', {'order_id': oid, 'parcel': parcel}, 'POST')
+        fake.assert_awaited_once()
+        self.assertEqual(fake.await_args.args[1]['price'], 3000)
+        self.assertEqual(fake.await_args.args[1]['parcel'], parcel)
         self.assertTrue(all(r['ttn'] == '12345678901234' and r['shipping_state'] == 'created'
                             for r in market.q('select ttn,shipping_state from market_orders')))
 

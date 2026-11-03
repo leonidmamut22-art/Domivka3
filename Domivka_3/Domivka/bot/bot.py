@@ -28,12 +28,13 @@ import market
 import market_bot
 import business
 import billing
+import deployment
 import cart
 from version import VERSION
 
 ROOT = Path(__file__).resolve().parent.parent
 ENV = ROOT / ".env"
-DATA = ROOT / "data"
+DATA = Path(os.environ.get("DATA_DIR", str(ROOT / "data")))
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 
@@ -722,6 +723,7 @@ async def set_menu_button():
 async def on_tunnel_url(url: str):
     """Нова публічна адреса Mini App: запам'ятовуємо й оновлюємо кнопку меню."""
     global WEBAPP_URL
+    await deployment.verify_public_app(url, bot.id)
     WEBAPP_URL = url.rstrip("/")
     await set_menu_button()
     logging.info("📱 Mini App готовий: %s (кнопка «Домівка» біля поля введення в чаті з ботом)", WEBAPP_URL)
@@ -1662,6 +1664,7 @@ async def background():
 async def main():
     global WEBAPP_URL, bot, SITE, APPROVAL, BOT_USERNAME, ADMINS, PAYMODE, DEPOSIT, COMMISSION, PAY_HOURS, HOST_HOURS, FREE_CANCEL_H, BOOST_PRICE, BOOST_FREE_DAYS, PAY_TOKEN, PAY_REQ
     load_env()
+    deployment.check_config()
     num = lambda k, d: int(re.sub(r"\D", "", os.environ.get(k, "")) or d)
     PAYMODE = os.environ.get("PAYMENT_MODE", "direct").lower()
     if PAYMODE not in ("off", "direct", "manual", "telegram"):
@@ -1693,6 +1696,9 @@ async def main():
     except Exception:
         sys.exit("Токен не підійшов. Перевірте BOT_TOKEN у файлі .env (скопіюйте його з @BotFather ще раз).")
     BOT_USERNAME = me.username or ""
+    expected = os.environ.get("EXPECTED_BOT_USERNAME", "").lstrip("@").lower()
+    if expected and expected != BOT_USERNAME.lower():
+        sys.exit("BOT_TOKEN належить іншому боту. Перевірте EXPECTED_BOT_USERNAME і окремий .env.")
     feat.setup(sys.modules[__name__])
     await bot.set_my_commands([
         BotCommand(command="start", description="Домівка — оберіть свій маркет"),

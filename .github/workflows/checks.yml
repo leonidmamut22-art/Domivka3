@@ -19,6 +19,7 @@ jobs:
         with:
           node-version: '22'
       - run: python -m pip install -r bot/requirements.txt
+      - run: bash -n deploy/install.sh
       - run: python -m compileall -q bot
       - run: python -m unittest discover -s tests -v
       - run: node tests/check_frontend.mjs
